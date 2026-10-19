@@ -1,0 +1,6 @@
+{
+  "servers": [
+    { "name": "staging", "url": "http://127.0.0.1:9200", "username": "", "password": "", "insecure": false },
+    { "name": "production", "url": "http://127.0.0.1:9201", "username": "", "password": "", "insecure": false }
+  ]
+}

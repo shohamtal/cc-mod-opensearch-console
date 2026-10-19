@@ -1,0 +1,135 @@
+# OpenSearch Console for Claude Code
+
+A Kibana / OpenSearch **Dev Tools-style console** that lives in a Claude Code side pane.
+Claude writes queries into it, you read, edit and run them, and Claude reads the response back.
+Works with OpenSearch and Elasticsearch, and it is **read-only by design**.
+
+![The console: request editor on top, folded JSON response below](docs/console.png)
+
+## Why
+
+When you debug a search index with an agent, the agent usually runs `curl` itself and you squint at JSON in the transcript.
+This mod keeps you in the loop instead:
+
+- **The agent proposes, you dispose.** Claude injects the query into the editor; you see it, tweak it, and press ▶ yourself.
+- **A real response viewer.** Colored JSON with folding, search and copy, instead of a wall of text.
+- **Nothing writes to your cluster.** Only reads are ever sent (see [Read-only](#read-only)).
+
+## Features
+
+| | |
+|---|---|
+| **Editor** | Dev Tools syntax (`METHOD path` + JSON body, many requests per file), JSON colors, auto-indent and bracket pairing, selection, copy / cut / paste, format, **index-name autocomplete** |
+| **Run** | Click ▶ in the gutter next to a request, or `ctrl+r` / `ctrl+enter` |
+| **Response** | Colored, foldable JSON (click, Enter, ←/→, `e`/`c` expand/collapse all, `1`–`9` fold to depth), mouse-wheel scroll, `y` to copy |
+| **Find** | Search the response; matches are highlighted and collapsed parents open by themselves; `n`/`N` next/previous |
+| **Servers** | Switch clusters (e.g. staging / production) with one click; creds stay in a local config file |
+| **Agents** | One JSON file per console, so several sessions or agents never overwrite each other; a tool documents the protocol for the model |
+
+| Find in the response | Folding | Built-in help |
+|---|---|---|
+| ![search](docs/search.png) | ![folding](docs/folding.png) | ![help](docs/help.png) |
+
+> Screenshots use made-up data from [`demo/mock_opensearch.py`](demo/mock_opensearch.py).
+
+## Install
+
+In a Claude Code terminal session:
+
+```
+/plugin install opensearch-console --marketplace shohamtal/claude-opensearch-console
+```
+
+Answer `y` to add the marketplace and pick a scope. Then type `/opensearch` to toggle the pane.
+
+Requirements: Claude Code with function-hook mods (2.1.29x or newer), `curl` on your `PATH`, and macOS `pbpaste` for `ctrl+v` (your terminal's own paste works everywhere).
+
+<details>
+<summary>Run from a local checkout instead</summary>
+
+```bash
+git clone git@github.com:shohamtal/claude-opensearch-console.git
+claude --plugin-dir ./claude-opensearch-console
+```
+
+Or load it in every session with `CLAUDE_CODE_PLUGIN_DIRS` in the `env` block of `~/.claude/settings.json`.
+</details>
+
+## Configure your clusters
+
+On first use the mod creates `~/.claude/mods/opensearch/servers.json`. Edit it:
+
+```json
+{
+  "servers": [
+    { "name": "staging",    "url": "https://search-staging.example.com:443", "username": "reader", "password": "…", "insecure": false },
+    { "name": "production", "url": "http://localhost:9201", "username": "", "password": "", "insecure": true,
+      "headers": { "X-Custom": "1" }, "indices": ["extra-name-for-autocomplete"] }
+  ]
+}
+```
+
+- `insecure: true` passes `-k` to curl (self-signed certs, port-forwards).
+- Credentials are handed to curl on **stdin**, never on the command line, so they don't show up in `ps`.
+- Keep this file private (`chmod 600`). It never leaves your machine.
+
+## Use it with Claude
+
+Type `/opensearch` and ask Claude for a query, e.g. *"find products from brand Northpeak that mention trail, with a brand aggregation"*.
+Claude writes the query into the console, you check it and press ▶, and Claude reads the response.
+
+Everything the pane shows is backed by plain files, so the agent needs no special API:
+
+| File | What it holds |
+|---|---|
+| `~/.claude/mods/opensearch/sessions/<name>.json` | `{ server, cursorRow, query, lastRun }`, which is the editor text and which request ▶ runs |
+| `~/.claude/mods/opensearch/sessions/<name>.response.json` | The last response body (pretty JSON) |
+| `~/.claude/mods/opensearch/servers.json` | Clusters and credentials (any path via `--configfilepath`) |
+| `~/.claude/mods/opensearch/indices.json` | Cached index and alias names for autocomplete, per server URL |
+
+Writes to these files show up in the pane within a second, and your edits are written back.
+
+### Separate consoles per session or agent
+
+```
+/opensearch --filepath investigation-42.json --configfilepath ~/work/opensearch-servers.json
+```
+
+Each console keeps its own query, server and last response. Relative names live under `~/.claude/mods/opensearch/sessions/`.
+Agents can do the same through the `mcp__opensearch-console__console` tool (`action`: open / close / status, `filepath`, `configfilepath`); its description tells the model the whole protocol.
+
+## Read-only
+
+The console only sends requests that read:
+
+- `GET` and `HEAD`
+- `POST` to `_search`, `_msearch`, `_count`, `_mget`, `_explain`, `_validate`, `_field_caps`, `_analyze`, `_termvectors`, `_mtermvectors`, `_rank_eval`, search templates, scroll and point-in-time
+- `DELETE` only to clear a scroll or point-in-time
+
+Anything else (`PUT`, `PATCH`, `_bulk`, `_doc`, `_update`, `_delete_by_query`, `_update_by_query`, `_reindex`, `_aliases`, `_close`, `_forcemerge`, …) is refused before curl runs, and the response pane says why.
+The guard lives in [`hooks/lib.ts`](hooks/lib.ts) (`writeGuard`) and is covered by tests.
+Defense in depth still matters: point the console at a **read-only user** where you can.
+
+## Keys
+
+| Where | Keys |
+|---|---|
+| Editor | `ctrl+r` run · `ctrl+l` format · shift+arrows / drag select · `ctrl+a` select all · `ctrl+c` / `ctrl+x` / `ctrl+v` · `ctrl+k` kill to end of line · Tab / Enter accept autocomplete |
+| Response | ↑↓ `j` `k` · PgUp / PgDn · `g` / `G` · Enter / Space / click fold · ←/→ · `e` / `c` · `1`–`9` · `/` or `ctrl+f` find · `n` / `N` · `y` copy |
+| Anywhere | Mouse wheel scrolls the half under the pointer · Esc returns to the prompt · `/opensearch` toggles the pane |
+
+## Develop
+
+```bash
+claude plugin validate .     # what the engine will load
+claude plugin test .         # unit + render tests
+python3 demo/mock_opensearch.py 9200 &   # fake cluster with demo data
+claude --plugin-dir .
+/opensearch --filepath demo.json --configfilepath ./demo/servers.json
+```
+
+Layout: `hooks/register.tsx` (events, pane, files, curl), `hooks/editor.tsx` and `hooks/viewer.tsx` (surface modules that draw the two halves), `hooks/lib.ts` (parsing, JSON tree, search, read-only guard).
+
+## License
+
+MIT
