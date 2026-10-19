@@ -95,3 +95,38 @@ test('parses /opensearch arguments', async () => {
   expect(parseArgs('--file="my session.json"')).toEqual({ file: 'my session.json', rest: [] })
   expect(parseArgs('')).toEqual({ rest: [] })
 })
+
+describe('security review fixes', () => {
+  test('a fragment or encoded path cannot smuggle a write past the guard', async () => {
+    for (const [method, path] of [
+      ['DELETE', 'prod-logs#/_search/scroll'], ['POST', 'idx/_doc/1#/_search'], ['POST', 'idx/_update_by_query#/_search'],
+      ['POST', '_cluster/settings#/_count'], ['GET', 'idx#x'], ['POST', 'idx%2F_doc%2F1/_search'], ['POST', 'idx/%5Fbulk'],
+      ['POST', 'idx/./_bulk'], ['POST', 'idx//_search'], ['POST', 'idx/_search\\x'], ['POST', 'idx/_search x'],
+    ]) expect(writeGuard({ method: method!, path: path! })).toBeDefined()
+  })
+
+  test('read-looking names in id slots do not pass (whole-route matching)', async () => {
+    for (const [method, path] of [
+      ['POST', 'victim/_update/point_in_time'], ['POST', 'victim/_doc/point_in_time'], ['POST', '_scripts/point_in_time'],
+      ['POST', '_snapshot/repo/point_in_time'], ['POST', 'idx/_doc/_search'], ['POST', 'idx/_create/_count'],
+      ['POST', '_ingest/pipeline/_search'], ['POST', 'point_in_time'], ['POST', 'idx/point_in_time'],
+      ['DELETE', 'idx/_search/scroll'], ['POST', 'idx/_explain/_bulk'],
+    ]) expect(writeGuard({ method: method!, path: path! })).toBeDefined()
+  })
+
+  test('the real point-in-time and scroll routes still pass', async () => {
+    for (const [method, path] of [
+      ['POST', 'idx/_search/point_in_time?keep_alive=1m'], ['DELETE', '_search/point_in_time'],
+      ['POST', '_search/scroll/abc123'], ['DELETE', '_search/scroll/abc123'], ['POST', 'logs-*,metrics/_search'],
+      ['POST', 'idx/_validate/query?explain'], ['POST', 'idx/_termvectors/7'], ['POST', '_render/template'],
+    ]) expect(writeGuard({ method: method!, path: path! })).toBeUndefined()
+  })
+
+  test('a body is sent literally: `@file` is text, never a file curl reads', async () => {
+    const [req] = parseRequests('POST idx/_search\n@/home/me/.aws/credentials\n')
+    const cfg = curlConfig({ name: 's', url: 'http://h' }, req!)
+    expect(cfg).toContain('data-raw = "@/home/me/.aws/credentials"')
+    expect(cfg).not.toContain('data-binary')
+    expect(cfg).toContain('globoff')
+  })
+})

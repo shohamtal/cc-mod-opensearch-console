@@ -132,6 +132,8 @@ export function curlConfig(server: ServerCreds, r: Request): string {
     `header = ${curlQuote('Content-Type: ' + contentType)}`,
     'silent',
     'show-error',
+    // `{}` and `[]` in a path are text, never a curl URL glob.
+    'globoff',
     'max-time = 120',
     `write-out = ${curlQuote('\n' + MARK + '%{http_code} %{time_total}')}`,
   ]
@@ -139,7 +141,8 @@ export function curlConfig(server: ServerCreds, r: Request): string {
   if (server.username) lines.push(`user = ${curlQuote(`${server.username}:${server.password ?? ''}`)}`)
   if (server.insecure) lines.push('insecure')
   if (r.method === 'HEAD') lines.push('head')
-  if (body !== undefined) lines.push(`data-binary = ${curlQuote(body)}`)
+  // data-raw sends the body as written: a leading `@` is text, not a file for curl to read.
+  if (body !== undefined) lines.push(`data-raw = ${curlQuote(body)}`)
   return lines.join('\n') + '\n'
 }
 
@@ -267,28 +270,52 @@ export function highlight(segs: Seg[], term: string, code: string): Seg[] {
 
 // ---- read-only guard ----
 
-// POST endpoints that only read. Anything else that is not GET/HEAD is refused.
-const READ_POSTS = [
-  '_search', '_msearch', '_count', '_mget', '_explain', '_validate', '_field_caps', '_analyze',
-  '_termvectors', '_mtermvectors', '_rank_eval', '_search/template', '_msearch/template',
-  '_render/template', '_search/scroll', '_search_shards', 'point_in_time',
+// A path segment naming an index (a comma list or wildcard too) or a document id: never `_`-led.
+const NAME = String.raw`[^/_][^/]*`
+
+// Whole routes that only read, matched against the path after an optional leading index.
+// Whole routes, not suffixes: a read-looking word in an id slot (`idx/_doc/point_in_time`) never matches.
+const POST_ANY_INDEX = [
+  '_search', '_search/template', '_msearch', '_msearch/template', '_count', '_mget',
+  '_validate/query', '_field_caps', '_analyze', '_mtermvectors', '_rank_eval', '_search_shards',
 ]
+const POST_WITH_INDEX = [`_explain/${NAME}`, `_termvectors(/${NAME})?`, '_search/point_in_time']
+const POST_NO_INDEX = [String.raw`_render/template(/[^/]+)?`, String.raw`_search/scroll(/[^/]+)?`]
+const DELETE_NO_INDEX = [String.raw`_search/scroll(/[^/]+)?`, '_search/point_in_time']
+
+const whole = (routes: string[]) => new RegExp(`^(?:${routes.join('|')})$`)
+const POST_ANY_RE = whole(POST_ANY_INDEX)
+const POST_INDEX_RE = whole(POST_WITH_INDEX)
+const POST_BARE_RE = whole(POST_NO_INDEX)
+const DELETE_BARE_RE = whole(DELETE_NO_INDEX)
+
+// Why the path cannot be checked as written, or undefined. The guard must judge the exact path
+// curl sends: `#` starts a fragment curl drops, `%` encodings and `.`/`..` segments are decoded
+// or normalized on the way, whitespace and control characters split or confuse the request line.
+function unsafePath(path: string): string | undefined {
+  if (/[#\s\x00-\x1f\x7f\\]/.test(path)) return 'it holds `#`, whitespace, a backslash or a control character'
+  const route = path.split('?')[0]!
+  if (route.includes('%')) return 'its path holds a %-encoded character'
+  const segs = route.replace(/^\/+/, '').split('/')
+  if (segs.some((seg, i) => seg === '.' || seg === '..' || (seg === '' && i < segs.length - 1))) return 'it has an empty, `.` or `..` path segment'
+  return undefined
+}
 
 // Why the request is refused, or undefined when it only reads.
 export function writeGuard(r: Pick<Request, 'method' | 'path'>): string | undefined {
-  const p = r.path.split('?')[0]!.replace(/^\/+|\/+$/g, '')
-  const parts = p.split('/')
+  const bad = unsafePath(r.path)
+  if (bad) return `Read-only console: ${r.method} ${r.path} was not sent because ${bad}, so the guard cannot tell what it would do.`
   if (r.method === 'GET' || r.method === 'HEAD') return undefined
-  if (r.method === 'DELETE' && /(^|\/)_search\/scroll(\/|$)/.test(p)) return undefined
-  if (r.method === 'DELETE' && /(^|\/)_search\/point_in_time(\/|$)/.test(p)) return undefined
+  const p = r.path.split('?')[0]!.replace(/^\/+|\/+$/g, '')
+  const [first = '', ...rest] = p.split('/')
+  const hasIndex = first !== '' && !first.startsWith('_')
+  const route = hasIndex ? rest.join('/') : p
   if (r.method === 'POST') {
-    const tail2 = parts.slice(-2).join('/')
-    const tail1 = parts[parts.length - 1] ?? ''
-    const scrollId = parts.length >= 3 && parts[parts.length - 3] === '_search' && parts[parts.length - 2] === 'scroll'
-    if (READ_POSTS.includes(tail1) || READ_POSTS.includes(tail2) || scrollId) return undefined
-    // `<index>/_explain/<id>`, `<index>/_termvectors/<id>`
-    if (parts.length >= 2 && ['_explain', '_termvectors'].includes(parts[parts.length - 2]!)) return undefined
+    if (POST_ANY_RE.test(route)) return undefined
+    if (hasIndex && POST_INDEX_RE.test(route)) return undefined
+    if (!hasIndex && POST_BARE_RE.test(route)) return undefined
   }
+  if (r.method === 'DELETE' && !hasIndex && DELETE_BARE_RE.test(route)) return undefined
   return `Read-only console: ${r.method} ${r.path || '/'} could write to the cluster, so it was not sent. Allowed: GET, HEAD, and POST to search/count/mget/explain/validate/field_caps/analyze/termvectors/templates/scroll.`
 }
 

@@ -107,6 +107,10 @@ The console only sends requests that read:
 - `DELETE` only to clear a scroll or point-in-time
 
 Anything else (`PUT`, `PATCH`, `_bulk`, `_doc`, `_update`, `_delete_by_query`, `_update_by_query`, `_reindex`, `_aliases`, `_close`, `_forcemerge`, …) is refused before curl runs, and the response pane says why.
+
+- **Whole routes:** the guard matches whole routes (`<index>/_search`, `<index>/_explain/<id>`, `_search/scroll/<id>`, …), not path endings, so a read-looking word used as a document, script or snapshot id doesn't pass.
+- **Exact path:** paths with `#`, `%`-encoding, `.`/`..` or empty segments, whitespace or backslashes are refused, so the guard always judges the exact path curl sends.
+- **Literal bodies:** request bodies go as `data-raw`, so a body starting with `@` is sent as text and never makes curl read a local file. URL globbing is off.
 The guard lives in [`hooks/lib.ts`](hooks/lib.ts) (`writeGuard`) and is covered by tests.
 Defense in depth still matters: point the console at a **read-only user** where you can.
 
