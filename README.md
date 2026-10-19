@@ -1,10 +1,10 @@
-# OpenSearch Console for Claude Code
+# OpenSearch Console: a Claude Code mod
 
 A Kibana / OpenSearch **Dev Tools-style console** that lives in a Claude Code side pane.
 Claude writes queries into it, you read, edit and run them, and Claude reads the response back.
 Works with OpenSearch and Elasticsearch, and it is **read-only by design**.
 
-![The console: request editor on top, folded JSON response below](docs/console.png)
+![Claude Code with the console docked on the right: Claude reads the response the user just ran and summarizes it](docs/claude-reads-response.png)
 
 ## Why
 
@@ -14,6 +14,14 @@ This mod keeps you in the loop instead:
 - **The agent proposes, you dispose.** Claude injects the query into the editor; you see it, tweak it, and press ▶ yourself.
 - **A real response viewer.** Colored JSON with folding, search and copy, instead of a wall of text.
 - **Nothing writes to your cluster.** Only reads are ever sent (see [Read-only](#read-only)).
+
+## How it looks
+
+**1. You ask, Claude writes the query into your console.** It shows up in the pane on the right, ready to read and edit.
+
+![Claude writes a search query into the console pane](docs/claude-writes-query.png)
+
+**2. You press ▶. Claude reads the response** from the console's response file and explains it, as in the screenshot at the top.
 
 ## Features
 
@@ -30,17 +38,23 @@ This mod keeps you in the loop instead:
 |---|---|---|
 | ![search](docs/search.png) | ![folding](docs/folding.png) | ![help](docs/help.png) |
 
-> Screenshots use made-up data from [`demo/mock_opensearch.py`](demo/mock_opensearch.py).
+> All screenshots come from a throwaway demo session against made-up data ([`demo/mock_opensearch.py`](demo/mock_opensearch.py)), not a real cluster or terminal.
 
 ## Install
 
-In a Claude Code terminal session:
+```
+claude plugin marketplace add shohamtal/cc-mod-opensearch-console
+claude plugin install opensearch-console@cc-mod-opensearch-console --scope user
+```
+
+Or from inside a Claude Code session:
 
 ```
-/plugin install opensearch-console --marketplace shohamtal/claude-opensearch-console
+/plugin marketplace add shohamtal/cc-mod-opensearch-console
+/plugin install opensearch-console@cc-mod-opensearch-console
 ```
 
-Answer `y` to add the marketplace and pick a scope. Then type `/opensearch` to toggle the pane.
+Then type `/opensearch` to toggle the pane.
 
 Requirements: Claude Code with function-hook mods (2.1.29x or newer), `curl` on your `PATH`, and macOS `pbpaste` for `ctrl+v` (your terminal's own paste works everywhere).
 
@@ -48,8 +62,8 @@ Requirements: Claude Code with function-hook mods (2.1.29x or newer), `curl` on 
 <summary>Run from a local checkout instead</summary>
 
 ```bash
-git clone git@github.com:shohamtal/claude-opensearch-console.git
-claude --plugin-dir ./claude-opensearch-console
+git clone git@github.com:shohamtal/cc-mod-opensearch-console.git
+claude --plugin-dir ./cc-mod-opensearch-console
 ```
 
 Or load it in every session with `CLAUDE_CODE_PLUGIN_DIRS` in the `env` block of `~/.claude/settings.json`.
