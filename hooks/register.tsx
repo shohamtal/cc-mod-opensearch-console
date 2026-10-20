@@ -32,6 +32,11 @@ import {
   wrapRows,
   asciiView,
   pageFrom,
+  toSlash,
+  isAbsolutePath,
+  homeOf,
+  fromCmdSet,
+  ENV_NAME,
   type Server,
 } from './lib'
 
@@ -135,11 +140,14 @@ let matchCache: { key: string; paths: string[] } | undefined
 const responseFile = () => sessionFile.replace(/(\.json)?$/, '.response.json')
 const indicesFile = () => `${base}/indices.json`
 
+async function homeDir($: EngineInterface): Promise<string> {
+  return homeOf(await $.env.get('HOME'), await $.env.get('USERPROFILE'))
+}
+
 async function resolvePath($: EngineInterface, p: string, under: string): Promise<string> {
-  const home = (await $.env.get('HOME')) ?? ''
-  if (p.startsWith('~/')) return home + p.slice(1)
-  if (p.startsWith('/')) return p
-  return `${under}/${p}`
+  if (p.startsWith('~/') || p.startsWith('~\\')) return (await homeDir($)) + toSlash(p.slice(1))
+  if (isAbsolutePath(p)) return toSlash(p)
+  return `${under}/${toSlash(p)}`
 }
 
 async function write($: EngineInterface, file: string, text: string) {
@@ -171,7 +179,11 @@ async function passwordOf($: EngineInterface, s: Server): Promise<string> {
   if (s.passwordEnv) {
     // $.env.get takes only literal names, so a configured variable is read through printenv.
     const out = await $.process.run(['printenv', s.passwordEnv]).catch(() => undefined)
-    return out && out.exitCode === 0 ? out.stdout.replace(/\r?\n$/, '') : ''
+    if (out) return out.exitCode === 0 ? out.stdout.replace(/\r?\n$/, '') : ''
+    // No printenv (Windows without Git Bash): cmd's `set`, for a plain variable name only.
+    if (!ENV_NAME.test(s.passwordEnv)) return ''
+    const set = await $.process.run(['cmd.exe', '/d', '/c', 'set', s.passwordEnv]).catch(() => undefined)
+    return set && set.exitCode === 0 ? fromCmdSet(set.stdout, s.passwordEnv) ?? '' : ''
   }
   return s.password ?? ''
 }
@@ -376,8 +388,7 @@ async function sync($: EngineInterface) {
 }
 
 async function ensureBase($: EngineInterface) {
-  const home = (await $.env.get('HOME')) ?? ''
-  base = `${home}/.claude/mods/opensearch`
+  base = `${await homeDir($)}/.claude/mods/opensearch`
   if (!(await $.fs.exists(`${base}/servers.json`))) await $.fs.write(`${base}/servers.json`, JSON.stringify(DEFAULT_SERVERS, null, 2) + '\n')
 }
 
@@ -653,8 +664,8 @@ export const register: Register = on => {
     if (input.configfilepath) {
       if (!base) await ensureBase($)
       const want = await resolvePath($, input.configfilepath, base)
-      const real = (await $.fs.stat(want, { resolve: true }).catch(() => undefined))?.realPath ?? want
-      const root = (await $.fs.stat(base, { resolve: true }).catch(() => undefined))?.realPath ?? base
+      const real = toSlash((await $.fs.stat(want, { resolve: true }).catch(() => undefined))?.realPath ?? want)
+      const root = toSlash((await $.fs.stat(base, { resolve: true }).catch(() => undefined))?.realPath ?? base)
       if (!real.startsWith(root + '/') || real.toLowerCase().startsWith((root + '/sessions/').toLowerCase())) return { result: `configfilepath must be inside ${base}/ (not sessions/). Ask the user to open other configs with /opensearch --configfilepath.`, isError: true }
     }
     const refused = await attach($, input.filepath, input.configfilepath)

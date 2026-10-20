@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.2.1
+
+- **Windows:** the mod's folder falls back to `%USERPROFILE%` when `HOME` is unset. `C:\…` and `\\server\share` paths are absolute, and backslashes work in `--filepath` / `--configfilepath`. The agent tool's "config must be inside the mod's folder" check compares paths with forward slashes. `passwordEnv` falls back to `cmd /c set` when `printenv` is missing, for plain variable names only.
+
 ## 0.2.0
 
 - **Any number of servers** in a ▾ menu. A server is `{id, name, host, port, https, insecure, username, password | passwordEnv | passwordCommand, tag, path, headers, indices}`, and old `{name, url}` entries still work.

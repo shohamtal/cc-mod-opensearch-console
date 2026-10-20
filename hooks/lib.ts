@@ -409,6 +409,29 @@ export const baseUrl = (s: Pick<Server, 'host' | 'port' | 'https' | 'path'>) =>
 export const tagColor = (tag?: ServerTag) => (tag === 'production' ? 'error' : tag === 'staging' ? 'warning' : tag === 'development' ? 'success' : undefined)
 
 // Clipboard readers, tried in turn: macOS, Wayland, X11, Windows.
+// Paths with forward slashes on every platform: Windows accepts them, and the mod compares paths by prefix.
+export function toSlash(p: string): string {
+  return p.replace(/\\/g, '/')
+}
+
+// `/x`, `C:/x`, `C:\x` and `\\server\share` are absolute; anything else is relative to the mod's folder.
+export function isAbsolutePath(p: string): boolean {
+  return /^(?:\/|[A-Za-z]:[\\/]|\\\\)/.test(p)
+}
+
+// The home folder: HOME, or USERPROFILE on Windows where HOME is usually unset.
+export function homeOf(home: string | undefined, userProfile: string | undefined): string {
+  return toSlash(home || userProfile || '').replace(/\/+$/, '')
+}
+
+// `set NAME` in cmd prints every variable starting with NAME; this picks the exact one.
+export function fromCmdSet(out: string, name: string): string | undefined {
+  const line = out.split(/\r?\n/).find(l => l.slice(0, name.length + 1).toUpperCase() === `${name.toUpperCase()}=`)
+  return line === undefined ? undefined : line.slice(name.length + 1)
+}
+
+export const ENV_NAME = /^[A-Za-z_][A-Za-z0-9_]*$/
+
 export const PASTE_COMMANDS = [['pbpaste'], ['wl-paste', '-n'], ['xclip', '-o', '-selection', 'clipboard'], ['powershell.exe', '-NoProfile', '-Command', 'Get-Clipboard']]
 
 // Servers that send credentials need the person's OK before the first request: the host and
