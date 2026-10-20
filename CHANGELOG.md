@@ -2,7 +2,7 @@
 
 ## 0.2.1
 
-- **Windows:** the mod's folder falls back to `%USERPROFILE%` when `HOME` is unset. `C:\…` and `\\server\share` paths are absolute, and backslashes work in `--filepath` / `--configfilepath`. The agent tool's "config must be inside the mod's folder" check compares paths with forward slashes. `passwordEnv` falls back to `cmd /c set` when `printenv` is missing, for plain variable names only. `cmd.exe` and `curl.exe` run from `System32` by full path. All of this applies only when `OS` is `Windows_NT`; macOS and Linux behave as before, where `\` is part of a file name.
+- **Windows:** the mod's folder falls back to `%USERPROFILE%` when `HOME` is unset. `C:\…` and `\\server\share` paths are absolute, and backslashes work in `--filepath` / `--configfilepath`. The agent tool's "config must be inside the mod's folder" check compares paths with forward slashes. `passwordEnv` is read with `cmd /c set` instead of `printenv`, for plain variable names only. `cmd.exe` and `curl.exe` run from `System32` by full path. All of this applies only when `OS` is `Windows_NT`; macOS and Linux behave as before, where `\` is part of a file name.
 
 ## 0.2.0
 

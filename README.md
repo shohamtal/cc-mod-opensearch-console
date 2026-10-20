@@ -68,7 +68,7 @@ Requirements: Claude Code with function-hook mods (2.1.29x or newer) and `curl` 
   - `curl.exe` ships with Windows 10 and 11, and the mod runs it from `System32` by full path. Without it, the mod uses the `curl` on your `PATH`.
   - The mod's folder is `%USERPROFILE%\.claude\mods\opensearch` when `HOME` is unset, and `~` in paths means the same folder.
   - Paths may use `\` or `/`, and `C:\…` paths are absolute.
-  - `passwordEnv` is read with `printenv` when Git Bash provides it, and otherwise with `System32\cmd.exe /d /c set`, which allows only plain variable names.
+  - `passwordEnv` is read with `System32\cmd.exe /d /c set` (never a `printenv` from `PATH`), which allows only plain variable names.
   - `ctrl+v` uses PowerShell's `Get-Clipboard`.
   - A `passwordCommand` runs as given, so use a Windows command there.
 

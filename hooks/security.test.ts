@@ -279,15 +279,15 @@ describe('credentials', () => {
 })
 
 describe('Windows password variables', () => {
-  test('without printenv, passwordEnv is read with cmd set, exactly that variable', async ($, on) => {
+  test('on Windows, passwordEnv is read with System32 cmd set, never printenv, exactly that variable', async ($, on) => {
     const w = world(on, [{ id: 'w', name: 'W', host: '127.0.0.1', username: 'u', passwordEnv: 'OS_PW' }], { windows: true })
     const ui = await openConsole($)
     await ui.post({ type: 'run', text: 'GET _cluster/health', row: 0 }, { in: 'editor' })
     const trust = await ui.find({ key: 'trust-yes' })
     expect(trust).toBeDefined()
     await ui.press({ key: 'trust-yes' })
-    expect(w.runs.map(r => r.argv[0])).toEqual(['printenv', 'C:/Windows/System32/cmd.exe', 'curl'])
-    expect(w.runs[1]!.argv).toEqual(['C:/Windows/System32/cmd.exe', '/d', '/c', 'set', 'OS_PW'])
+    expect(w.runs.map(r => r.argv[0])).toEqual(['C:/Windows/System32/cmd.exe', 'curl'])
+    expect(w.runs[0]!.argv).toEqual(['C:/Windows/System32/cmd.exe', '/d', '/c', 'set', 'OS_PW'])
     expect(w.curls()[0]!.stdin).toContain('pw')
     expect(w.curls()[0]!.stdin).not.toContain('old')
   })

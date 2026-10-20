@@ -198,11 +198,13 @@ async function passwordOf($: EngineInterface, s: Server): Promise<string> {
     return out.stdout.replace(/\r?\n$/, '')
   }
   if (s.passwordEnv) {
-    // $.env.get takes only literal names, so a configured variable is read through printenv.
-    const out = await $.process.run(['printenv', s.passwordEnv]).catch(() => undefined)
-    if (out) return out.exitCode === 0 ? out.stdout.replace(/\r?\n$/, '') : ''
-    // No printenv (Windows without Git Bash): cmd's `set`, for a plain variable name only.
-    if (!(await onWindows($)) || !ENV_NAME.test(s.passwordEnv)) return ''
+    // $.env.get takes only literal names, so a configured variable is read through another program:
+    // printenv, or on Windows System32's cmd `set` (by full path, for a plain variable name only).
+    if (!(await onWindows($))) {
+      const out = await $.process.run(['printenv', s.passwordEnv]).catch(() => undefined)
+      return out && out.exitCode === 0 ? out.stdout.replace(/\r?\n$/, '') : ''
+    }
+    if (!ENV_NAME.test(s.passwordEnv)) return ''
     const set = await $.process.run([await system32($, 'cmd.exe'), '/d', '/c', 'set', s.passwordEnv]).catch(() => undefined)
     return set && set.exitCode === 0 ? fromCmdSet(set.stdout, s.passwordEnv) ?? '' : ''
   }
