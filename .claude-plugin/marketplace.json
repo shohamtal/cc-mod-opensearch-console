@@ -7,7 +7,7 @@
     {
       "name": "opensearch-console",
       "source": "./",
-      "description": "OpenSearch / Elasticsearch Dev Tools-style console in a Claude Code side pane: Claude injects queries, you edit and run them (read-only)."
+      "description": "OpenSearch & Elasticsearch Dev Tools-style console in a Claude Code side pane: Claude injects queries, you edit and run them (read-only)."
     }
   ]
 }

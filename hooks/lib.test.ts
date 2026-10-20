@@ -130,3 +130,11 @@ describe('security review fixes', () => {
     expect(cfg).toContain('globoff')
   })
 })
+
+test('Elasticsearch point in time: open on an index, close bare; nothing else', async () => {
+  expect(writeGuard({ method: 'POST', path: 'logs-*/_pit?keep_alive=1m' })).toBeUndefined()
+  expect(writeGuard({ method: 'DELETE', path: '_pit' })).toBeUndefined()
+  for (const [method, path] of [['POST', '_pit'], ['DELETE', 'idx/_pit'], ['POST', 'idx/_doc/_pit'], ['PUT', 'idx/_pit'], ['POST', '_scripts/_pit']]) {
+    expect(writeGuard({ method: method!, path: path! })).toBeDefined()
+  }
+})

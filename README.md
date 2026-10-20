@@ -1,8 +1,8 @@
-# OpenSearch Console: a Claude Code mod
+# OpenSearch & Elasticsearch Console: a Claude Code mod
 
-A Kibana / OpenSearch **Dev Tools-style console** that lives in a Claude Code side pane.
+A Kibana / OpenSearch Dashboards **Dev Tools-style console** for **OpenSearch and Elasticsearch** that lives in a Claude Code side pane.
 Claude writes queries into it, you read, edit and run them, and Claude reads the response back.
-Works with OpenSearch and Elasticsearch, and it is **read-only by design**.
+Works with OpenSearch and Elasticsearch through the REST API they share, and it is **read-only by design**.
 
 ![Claude Code with the console docked on the right: Claude reads the response the user just ran and summarizes it](docs/claude-reads-response.png)
 
@@ -83,7 +83,8 @@ On first use the mod creates `~/.claude/mods/opensearch/servers.json`. Edit it:
 }
 ```
 
-- `insecure: true` passes `-k` to curl (self-signed certs, port-forwards).
+- `insecure: true` passes `-k` to curl (self-signed certs, port-forwards, Elasticsearch 8's default HTTPS).
+- Elasticsearch API keys: leave `username` empty and add `"headers": { "Authorization": "ApiKey <base64 id:key>" }`.
 - Credentials are handed to curl on **stdin**, never on the command line, so they don't show up in `ps`.
 - Keep this file private (`chmod 600`). It never leaves your machine.
 
@@ -117,7 +118,7 @@ Agents can do the same through the `mcp__opensearch-console__console` tool (`act
 The console only sends requests that read:
 
 - `GET` and `HEAD`
-- `POST` to `_search`, `_msearch`, `_count`, `_mget`, `_explain`, `_validate`, `_field_caps`, `_analyze`, `_termvectors`, `_mtermvectors`, `_rank_eval`, search templates, scroll and point-in-time
+- `POST` to `_search`, `_msearch`, `_count`, `_mget`, `_explain`, `_validate`, `_field_caps`, `_analyze`, `_termvectors`, `_mtermvectors`, `_rank_eval`, search templates, scroll and point-in-time (OpenSearch `_search/point_in_time`, Elasticsearch `_pit`)
 - `DELETE` only to clear a scroll or point-in-time
 
 Anything else (`PUT`, `PATCH`, `_bulk`, `_doc`, `_update`, `_delete_by_query`, `_update_by_query`, `_reindex`, `_aliases`, `_close`, `_forcemerge`, …) is refused before curl runs, and the response pane says why.

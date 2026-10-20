@@ -279,9 +279,10 @@ const POST_ANY_INDEX = [
   '_search', '_search/template', '_msearch', '_msearch/template', '_count', '_mget',
   '_validate/query', '_field_caps', '_analyze', '_mtermvectors', '_rank_eval', '_search_shards',
 ]
-const POST_WITH_INDEX = [`_explain/${NAME}`, `_termvectors(/${NAME})?`, '_search/point_in_time']
+// Point in time: OpenSearch `<index>/_search/point_in_time`, Elasticsearch `<index>/_pit`.
+const POST_WITH_INDEX = [`_explain/${NAME}`, `_termvectors(/${NAME})?`, '_search/point_in_time', '_pit']
 const POST_NO_INDEX = [String.raw`_render/template(/[^/]+)?`, String.raw`_search/scroll(/[^/]+)?`]
-const DELETE_NO_INDEX = [String.raw`_search/scroll(/[^/]+)?`, '_search/point_in_time']
+const DELETE_NO_INDEX = [String.raw`_search/scroll(/[^/]+)?`, '_search/point_in_time', '_pit']
 
 const whole = (routes: string[]) => new RegExp(`^(?:${routes.join('|')})$`)
 const POST_ANY_RE = whole(POST_ANY_INDEX)
