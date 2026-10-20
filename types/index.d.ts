@@ -27,7 +27,7 @@ export type OsPending = { serverId: string; serverName: string; url: string; fin
 export type OsUnlock = { id: string; url: string; fingerprint: string }
 
 export type OsConfirm =
-  | { kind: 'write'; req: OsPending }
+  | { kind: 'write'; req: OsPending; shownFrom: number }
   | { kind: 'trust'; req: OsPending | null; serverId: string; serverName: string; url: string; source: string; fingerprint: string; then: 'run' | 'indices' }
 
 declare module 'claude-code' {
@@ -51,7 +51,6 @@ declare module 'claude-code' {
       confirm: OsConfirm | null
       unlocked: OsUnlock[]
       prodSeen: string[]
-      bodyPage: number
       editorCmd: { id: number; cmd: 'undo' | 'redo' } | null
     }
   }

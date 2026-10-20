@@ -30,6 +30,8 @@ import {
   duplicateKey,
   sentBody,
   wrapRows,
+  asciiView,
+  pageFrom,
   type Server,
 } from './lib'
 
@@ -58,8 +60,6 @@ const editorCmd = atom({ plugin: 'opensearch-console', key: 'editorCmd' } as con
 const unlocked = atom({ plugin: 'opensearch-console', key: 'unlocked' } as const, [])
 // Ids and URLs seen tagged production in this session: removing the tag later doesn't count.
 const prodSeen = atom({ plugin: 'opensearch-console', key: 'prodSeen' } as const, [])
-// The body page the write prompt shows; the send buttons wait for the last one.
-const bodyPage = atom({ plugin: 'opensearch-console', key: 'bodyPage' } as const, 0)
 
 const HELP = `**Top bar**
 - **▾ Server** — open the list of servers from \`servers.json\` and pick one (● is active; production is red)
@@ -493,8 +493,8 @@ async function run($: EngineInterface) {
   // Writes ask first, unless the person unlocked this exact server entry from the pane in this session.
   const isWrite = !!writeGuard(req)
   if (isWrite && !(await isUnlockedNow($, target))) {
-    await update($, confirm, () => ({ kind: 'write' as const, req: pending }))
-    await update($, bodyPage, () => 0)
+    await update($, menuOpen, () => false)
+    await update($, confirm, () => ({ kind: 'write' as const, req: pending, shownFrom: 0 }))
     return
   }
   await send($, pending)
@@ -767,14 +767,19 @@ export const register: Register = on => {
     const isUnlocked = !!targetFull && (await isUnlockedNow($, targetFull))
     const ask = await read($, confirm)
     const cols = (e.props as any).bodyColumns ?? 100
-    // A write prompt takes the whole pane. Its body is cut into pages that fit the pane's real
-    // rows and columns, and the send buttons show only on the last page, after every page.
-    // Toolbar, info line, the prompt's frame and its other lines take 9 rows (10 with a bulk summary).
-    const pageSize = Math.max(3, rows - 9 - (ask && ask.kind === 'write' && ask.req.summary ? 1 : 0))
-    const bodyLines = ask && ask.kind === 'write' ? wrapRows(ask.req.sent, cols - 4) : []
-    const pages = Math.max(1, Math.ceil(bodyLines.length / pageSize))
-    const page = Math.min((await read($, bodyPage)) ?? 0, pages - 1)
-    const bodySeen = !!ask && ask.kind === 'write' && ask.req.sent.length <= BODY_LIMIT && page === pages - 1
+    // A write prompt takes the whole pane. It draws ASCII only (\uXXXX for anything else), counts
+    // every row it uses from the pane's real size, and shows the body forward from the furthest
+    // point already shown; the send buttons appear only once the end has been on screen.
+    const promptWidth = Math.max(10, cols - 4)
+    const isWritePrompt = !!ask && ask.kind === 'write'
+    const urlRows = isWritePrompt ? wrapRows(asciiView(`${ask.req.method} ${ask.req.url}/${ask.req.path.replace(/^\/+/, '')}`), promptWidth) : []
+    const bodyView = isWritePrompt ? asciiView(ask.req.sent) : ''
+    const chrome = 8 + urlRows.length + (isWritePrompt && ask.req.summary ? 1 : 0)
+    const pageSize = rows - chrome
+    const tooLong = bodyView.length > BODY_LIMIT
+    const tooSmall = isWritePrompt && pageSize < (bodyView ? 3 : 0)
+    const shown = isWritePrompt && bodyView && !tooLong && !tooSmall ? pageFrom(bodyView, ask.shownFrom, promptWidth, pageSize) : { rows: [] as string[], end: bodyView.length }
+    const bodySeen = isWritePrompt && !tooLong && !tooSmall && shown.end >= bodyView.length
     const cmd = await read($, editorCmd)
     const help = await read($, showHelp)
     const pasted = await read($, paste)
@@ -899,25 +904,40 @@ export const register: Register = on => {
         ) : null}
         {ask && ask.kind === 'write' ? (
           <Box flexDirection="column" borderStyle="round" borderColor="#f14c4c" backgroundColor="#1e1e1e" paddingX={1}>
-            <Text bold color="error">{`Writes are locked for ${ask.req.serverName}`}</Text>
-            <Text>{`${ask.req.method} ${ask.req.url}/${ask.req.path.replace(/^\/+/, '')}`}</Text>
-            {ask.req.summary ? <Text color="warning">{ask.req.summary}</Text> : null}
-            {!ask.req.sent ? (
+            <Text bold color="error" wrap="truncate-end">{`Writes are locked for ${asciiView(ask.req.serverName)}`}</Text>
+            {urlRows.map(r => (
+              <Text wrap="truncate-end">{r}</Text>
+            ))}
+            {ask.req.summary ? <Text color="warning" wrap="truncate-end">{ask.req.summary}</Text> : null}
+            {!bodyView ? (
               <Text dimColor>no body</Text>
-            ) : ask.req.sent.length > BODY_LIMIT ? (
-              <Text color="error">{`body: ${ask.req.sent.length} characters, too long to review here, so it can't be sent from the console.`}</Text>
+            ) : tooLong ? (
+              <Text color="error" wrap="truncate-end">{`body: ${bodyView.length} characters, too long to review here, so it can't be sent.`}</Text>
+            ) : tooSmall ? (
+              <Text color="error" wrap="truncate-end">Make the pane taller to review this body.</Text>
             ) : (
               <Box flexDirection="column">
-                <Text dimColor>{`body as sent${pages > 1 ? `, page ${page + 1} of ${pages}` : ''}:`}</Text>
-                {bodyLines.slice(page * pageSize, (page + 1) * pageSize).map(l => (
+                <Text dimColor wrap="truncate-end">{`body as sent (${bodyView.length} characters, shown up to ${Math.floor((shown.end / bodyView.length) * 100)}%):`}</Text>
+                {shown.rows.map(l => (
                   <Text wrap="truncate-end">{l || ' '}</Text>
                 ))}
               </Box>
             )}
-            <Text dimColor>{bodySeen ? 'This request can change data. Run sends exactly what is shown here.' : ask.req.sent.length > BODY_LIMIT ? 'Cancel, and send a smaller body.' : 'Read every page of the body before you can run it.'}</Text>
+            <Text dimColor wrap="truncate-end">{bodySeen ? 'This request can change data. Run sends exactly what is shown here.' : tooLong ? 'Cancel, and send a smaller body.' : tooSmall ? 'Enlarge the pane, or cancel.' : 'Read the whole body before you can run it.'}</Text>
             <Box flexDirection="row" gap={2} height={1}>
-              {!bodySeen && ask.req.sent.length <= BODY_LIMIT ? (
-                <Button key="body-next" label={`Next page (${page + 2} of ${pages})`} variant="primary" onPress={() => void update($, bodyPage, n => Math.min(pages - 1, (n ?? 0) + 1))} />
+              {!bodySeen && !tooLong && !tooSmall ? (
+                <Button
+                  key="body-next"
+                  label="Next page"
+                  variant="primary"
+                  onPress={() => {
+                    // Moves on from what this drawing showed; a stale press (another prompt by now) does nothing.
+                    const from = ask.shownFrom
+                    const to = shown.end
+                    const same = JSON.stringify(ask.req)
+                    void update($, confirm, c => (c && c.kind === 'write' && JSON.stringify(c.req) === same && c.shownFrom === from ? { ...c, shownFrom: to } : c))
+                  }}
+                />
               ) : null}
               {bodySeen ? (
                 <Button

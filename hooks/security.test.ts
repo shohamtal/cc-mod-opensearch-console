@@ -171,6 +171,50 @@ describe('long bodies', () => {
   })
 })
 
+describe('wide text and resizing', () => {
+  test('wide characters are shown escaped, so the hidden tail of a line is never counted as seen', async ($, on) => {
+    const w = world(on, [{ id: 'dev', name: 'Dev', host: '10.0.0.2' }])
+    await $.tool.call({ tool: TOOL, action: 'status', filepath: 's1.json' } as any)
+    const ui: any = await $.ui.mount({ ...PANE, viewport: { columns: 110, rows: 40 }, props: { ...PANE.props, bodyColumns: 110, scroll: { offset: 0, bodyRows: 40 } } })
+    const body = `{"query":{"bool":{"should":[{"term":{"n":"${'漢'.repeat(400)}"}}],"must":{"match_all":{}}}}}`
+    await ui.post({ type: 'run', text: `POST idx/_delete_by_query\n${body}`, row: 0 }, { in: 'editor' })
+    const drawn = JSON.stringify(await ui.drawn())
+    expect(drawn).toContain('\\\\u6f22')
+    expect(drawn).not.toContain('漢')
+    expect(w.curls()).toEqual([])
+  })
+
+  test('enlarging the pane continues from the furthest point shown; nothing is skipped', async ($, on) => {
+    const w = world(on, [{ id: 'dev', name: 'Dev', host: '10.0.0.2' }])
+    await $.tool.call({ tool: TOOL, action: 'status', filepath: 's1.json' } as any)
+    const small: any = await $.ui.mount({ ...PANE, props: { ...PANE.props, scroll: { offset: 0, bodyRows: 20 } } })
+    const lines = Array.from({ length: 60 }, (_, i) => `{"delete":{"_index":"p","_id":"d${i}"}}`).join('\n')
+    await small.post({ type: 'run', text: `POST _bulk\n${lines}`, row: 0 }, { in: 'editor' })
+    const first = JSON.stringify(await small.drawn())
+    expect(first).toContain('d0\\"')
+    expect(first).not.toContain('d20\\"')
+    await small.press({ key: 'body-next' })
+    await small.unmount()
+    const big: any = await $.ui.mount({ ...PANE, props: { ...PANE.props, scroll: { offset: 0, bodyRows: 200 } } })
+    const next = JSON.stringify(await big.drawn())
+    // The big pane shows the rest from where the small one stopped, so it reaches the end honestly.
+    expect(next).not.toContain('d0\\"')
+    expect(next).toContain('d59\\"')
+    expect(await big.find({ key: 'confirm-once' })).toBeDefined()
+    expect(w.curls()).toEqual([])
+  })
+
+  test('a too-small pane shows no send button at all', async ($, on) => {
+    const w = world(on, [{ id: 'dev', name: 'Dev', host: '10.0.0.2' }])
+    await $.tool.call({ tool: TOOL, action: 'status', filepath: 's1.json' } as any)
+    const ui: any = await $.ui.mount({ ...PANE, props: { ...PANE.props, scroll: { offset: 0, bodyRows: 10 } } })
+    await ui.post({ type: 'run', text: 'PUT idx/_doc/1\n{"a":1}', row: 0 }, { in: 'editor' })
+    expect(await ui.find({ key: 'confirm-once' })).toBeUndefined()
+    expect(await ui.find({ key: 'body-next' })).toBeUndefined()
+    expect(w.curls()).toEqual([])
+  })
+})
+
 describe('credentials', () => {
   test('a server with credentials asks first; nothing runs, not even its passwordCommand, until Allow', async ($, on) => {
     const w = world(on, [{ id: 'eu', name: 'EU', host: 'search.example.com', https: true, port: 443, username: 'reader', passwordCommand: ['pass', 'os/eu'] }])

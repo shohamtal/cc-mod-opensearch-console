@@ -2,7 +2,7 @@ import { describe, expect, test } from 'claude-code/testing'
 
 import {
   ancestorsOpen, buildLines, curlConfig, findMatches, foldablePaths, formatAt, highlight,
-  lineText, parseCurlOutput, parseRequests, requestAt, requestBody, writeGuard, parseArgs, normalizeServer, baseUrl, duplicateKey, sentBody,
+  lineText, parseCurlOutput, parseRequests, requestAt, requestBody, writeGuard, parseArgs, normalizeServer, baseUrl, duplicateKey, sentBody, asciiView, pageFrom,
 } from './lib'
 
 const CONSOLE = `GET _cluster/health
@@ -173,5 +173,19 @@ describe('the write prompt shows what is sent', () => {
     const r = sentBody({ path: '_bulk', body: '{"index":{"_index":"a"}}\n{"x":1}\n{"delete":{"_index":"a","_id":"1"}}\n{"delete":{"_index":"a","_id":"2"}}' })
     expect(r.summary).toBe('bulk actions: 1 index, 2 delete')
     expect(r.body.split('\n').length).toBe(5)
+  })
+})
+
+describe('the write prompt draws one column per character', () => {
+  test('anything outside printable ASCII is shown escaped', async () => {
+    expect(asciiView('{"a":"漢字😀\u200b\u202e"}')).toBe('{"a":"\\u6f22\\u5b57\\ud83d\\ude00\\u200b\\u202e"}')
+  })
+  test('pages move forward from the furthest point shown, whatever the size', async () => {
+    const text = 'abcdefghij'.repeat(6) + '\nshort\n' + 'z'.repeat(25)
+    const a = pageFrom(text, 0, 20, 2)
+    expect(a.rows).toEqual(['abcdefghijabcdefghij', 'abcdefghijabcdefghij'])
+    const b = pageFrom(text, a.end, 40, 10)
+    expect(b.rows[0]).toBe('abcdefghijabcdefghij')
+    expect(b.end).toBe(text.length)
   })
 })

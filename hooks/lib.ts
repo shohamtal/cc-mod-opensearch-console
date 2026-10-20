@@ -417,7 +417,7 @@ export const PASTE_COMMANDS = [['pbpaste'], ['wl-paste', '-n'], ['xclip', '-o', 
 // Anything that sends a secret or runs a program counts, with or without a username.
 export function credentialSource(s: Server): string | undefined {
   const parts: string[] = []
-  if (s.username) parts.push(`user ${s.username}`)
+  if (s.username) parts.push(`user ${JSON.stringify(s.username)}`)
   if (s.passwordCommand) parts.push(`password from the command ${JSON.stringify(s.passwordCommand)}`)
   else if (s.passwordEnv) parts.push(`password from $${JSON.stringify(s.passwordEnv).slice(1, -1)}`)
   else if (s.username || s.password) parts.push('password from servers.json')
@@ -554,4 +554,25 @@ export function wrapRows(text: string, width: number): string[] {
     for (let i = 0; i < line.length; i += w) out.push(line.slice(i, i + w))
   }
   return out
+}
+
+// Text as a prompt draws it: printable ASCII and newlines only, anything else as \uXXXX, so every
+// character takes exactly one column and nothing (wide, zero-width or bidi) hides what is sent.
+export const asciiView = (t: string) => t.replace(/[^\x20-\x7e\n]/g, c => '\\u' + c.charCodeAt(0).toString(16).padStart(4, '0'))
+
+// From offset `from` in an ASCII text, the rows that fit `height` rows of `width` columns, and the
+// offset just after the last character shown. Reading moves only forward, one shown page at a time.
+export function pageFrom(text: string, from: number, width: number, height: number): { rows: string[]; end: number } {
+  const w = Math.max(10, width)
+  const rows: string[] = []
+  let i = Math.max(0, from)
+  while (rows.length < height && i < text.length) {
+    const nl = text.indexOf('\n', i)
+    const lineEnd = nl < 0 ? text.length : nl
+    const piece = text.slice(i, Math.min(lineEnd, i + w))
+    rows.push(piece)
+    i += piece.length
+    if (i === lineEnd && nl >= 0) i++
+  }
+  return { rows, end: i }
 }
