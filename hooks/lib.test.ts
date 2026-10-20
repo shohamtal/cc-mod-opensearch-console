@@ -2,7 +2,7 @@ import { describe, expect, test } from 'claude-code/testing'
 
 import {
   ancestorsOpen, buildLines, curlConfig, findMatches, foldablePaths, formatAt, highlight,
-  lineText, parseCurlOutput, parseRequests, requestAt, requestBody, writeGuard, parseArgs,
+  lineText, parseCurlOutput, parseRequests, requestAt, requestBody, writeGuard, parseArgs, normalizeServer, baseUrl, duplicateKey, sentBody, asciiView, pageFrom,
 } from './lib'
 
 const CONSOLE = `GET _cluster/health
@@ -137,4 +137,55 @@ test('Elasticsearch point in time: open on an index, close bare; nothing else', 
   for (const [method, path] of [['POST', '_pit'], ['DELETE', 'idx/_pit'], ['POST', 'idx/_doc/_pit'], ['PUT', 'idx/_pit'], ['POST', '_scripts/_pit']]) {
     expect(writeGuard({ method: method!, path: path! })).toBeDefined()
   }
+})
+
+describe('servers', () => {
+  test('an old url entry becomes host, port and https; id falls back to name', async () => {
+    expect(normalizeServer({ name: 'stg', url: 'https://search.example.com:443/proxy/' })).toEqual({
+      id: 'stg', name: 'stg', host: 'search.example.com', port: 443, https: true, path: '/proxy',
+    })
+  })
+
+  test('the new shape keeps its fields and gets the default port', async () => {
+    // allowWrites in a config file is ignored: writes unlock only from the pane.
+    const s = normalizeServer({ id: 'eu', name: 'Production EU', host: '10.0.0.5', tag: 'production', passwordEnv: 'OS_PW', allowWrites: true, tag2: 'x' })!
+    expect(s).toEqual({ id: 'eu', name: 'Production EU', host: '10.0.0.5', port: 9200, https: false, passwordEnv: 'OS_PW', tag: 'production' })
+    expect(baseUrl(s)).toBe('http://10.0.0.5:9200')
+  })
+
+  test('entries without a host or a name are skipped; unknown tags are dropped', async () => {
+    expect(normalizeServer({ name: 'x' })).toBeUndefined()
+    expect(normalizeServer({ host: 'h' })).toBeUndefined()
+    expect(normalizeServer({ name: 'x', host: 'h', tag: 'prod' })!.tag).toBeUndefined()
+    expect(normalizeServer({ name: 'x', host: 'h', passwordCommand: ['security', 1] })!.passwordCommand).toBeUndefined()
+  })
+})
+
+describe('the write prompt shows what is sent', () => {
+  test('repeated JSON keys are found, at any depth and in bulk lines', async () => {
+    expect(duplicateKey('{"query":{"term":{"a":1}},"query":{"match_all":{}}}')).toBe('query')
+    expect(duplicateKey('{"a":{"b":1,"c":[{"d":1,"d":2}]}}')).toBe('a.c[0].d')
+    expect(duplicateKey('{"index":{}}\n{"x":1,"x":2}')).toBe('x')
+    expect(duplicateKey('{"a":"{\\"a\\":1}","b":{"a":1}}')).toBeUndefined()
+    expect(duplicateKey('{"a":1,"b":[1,2,{"a":2}]}')).toBeUndefined()
+  })
+  test('bulk bodies are summarized by action', async () => {
+    const r = sentBody({ path: '_bulk', body: '{"index":{"_index":"a"}}\n{"x":1}\n{"delete":{"_index":"a","_id":"1"}}\n{"delete":{"_index":"a","_id":"2"}}' })
+    expect(r.summary).toBe('bulk actions: 1 index, 2 delete')
+    expect(r.body.split('\n').length).toBe(5)
+  })
+})
+
+describe('the write prompt draws one column per character', () => {
+  test('anything outside printable ASCII is shown escaped', async () => {
+    expect(asciiView('{"a":"漢字😀\u200b\u202e"}')).toBe('{"a":"\\u6f22\\u5b57\\ud83d\\ude00\\u200b\\u202e"}')
+  })
+  test('pages move forward from the furthest point shown, whatever the size', async () => {
+    const text = 'abcdefghij'.repeat(6) + '\nshort\n' + 'z'.repeat(25)
+    const a = pageFrom(text, 0, 20, 2)
+    expect(a.rows).toEqual(['abcdefghijabcdefghij', 'abcdefghijabcdefghij'])
+    const b = pageFrom(text, a.end, 40, 10)
+    expect(b.rows[0]).toBe('abcdefghijabcdefghij')
+    expect(b.end).toBe(text.length)
+  })
 })

@@ -163,8 +163,9 @@ export function pretty(text: string): string {
 
 // ---- the viewer's tree ----
 
-const esc = (k: string) => k.replace(/~/g, '~0').replace(/\//g, '~1')
-export const END = '\u0000end'
+const esc = (k: string) => k.replace(/~/g, '~0').replace(/\//g, '~1').replace(/#/g, '~2')
+// Marks a closing-bracket line. `#` never appears in a path: esc() encodes it as ~2.
+export const END = '#end'
 
 export function parseJson(text: string): { ok: true; value: unknown } | { ok: false } {
   try {
@@ -336,4 +337,242 @@ export function parseArgs(args: string): { file?: string; config?: string; rest:
     else out.config = value
   }
   return out
+}
+
+// ---- servers ----
+
+export type ServerTag = 'production' | 'staging' | 'development' | 'local'
+
+// One entry of servers.json. `name` is what the dropdown shows; `id` is what session files keep.
+export type Server = {
+  id: string
+  name: string
+  host: string
+  port?: number
+  https?: boolean
+  insecure?: boolean
+  username?: string
+  password?: string
+  passwordEnv?: string
+  passwordCommand?: string[]
+  tag?: ServerTag
+  path?: string
+  headers?: Record<string, string>
+  indices?: string[]
+}
+
+const TAGS = new Set(['production', 'staging', 'development', 'local'])
+
+// Reads one config entry into the current shape. An old entry with `url` instead of
+// host / port / https still works; `id` falls back to `name`.
+export function normalizeServer(raw: unknown, defaultPort = 9200): Server | undefined {
+  if (!raw || typeof raw !== 'object') return undefined
+  const r = raw as Record<string, unknown>
+  const str = (v: unknown) => (typeof v === 'string' && v.trim() ? v.trim() : undefined)
+  let host = str(r.host)
+  let port = typeof r.port === 'number' ? r.port : undefined
+  let https = typeof r.https === 'boolean' ? r.https : undefined
+  let path = str(r.path)
+  const url = str(r.url)
+  if (!host && url) {
+    try {
+      const u = new URL(url)
+      host = u.hostname
+      https = u.protocol === 'https:'
+      port = u.port ? Number(u.port) : https ? 443 : 80
+      if (u.pathname && u.pathname !== '/') path = u.pathname.replace(/\/+$/, '')
+    } catch {
+      return undefined
+    }
+  }
+  const id = str(r.id) ?? str(r.name)
+  if (!id || !host) return undefined
+  // A host is a name or an address, never text that could garble a prompt.
+  if (!/^[A-Za-z0-9._\-:[\]]+$/.test(host)) return undefined
+  const s: Server = { id, name: str(r.name) ?? id, host: host.toLowerCase(), port: port ?? defaultPort, https: https ?? false }
+  if (r.insecure === true) s.insecure = true
+  if (str(r.username)) s.username = str(r.username)
+  if (typeof r.password === 'string') s.password = r.password
+  if (str(r.passwordEnv)) s.passwordEnv = str(r.passwordEnv)
+  if (Array.isArray(r.passwordCommand) && r.passwordCommand.length && r.passwordCommand.every(a => typeof a === 'string')) s.passwordCommand = r.passwordCommand as string[]
+  if (typeof r.tag === 'string' && TAGS.has(r.tag)) s.tag = r.tag as ServerTag
+  if (path) s.path = path.startsWith('/') ? path : `/${path}`
+  if (r.headers && typeof r.headers === 'object') s.headers = Object.fromEntries(Object.entries(r.headers as Record<string, unknown>).filter(([, v]) => typeof v === 'string')) as Record<string, string>
+  if (Array.isArray(r.indices)) s.indices = r.indices.map(String)
+  return s
+}
+
+export const baseUrl = (s: Pick<Server, 'host' | 'port' | 'https' | 'path'>) =>
+  `${s.https ? 'https' : 'http'}://${s.host}:${s.port ?? (s.https ? 443 : 9200)}${s.path ?? ''}`
+
+// The color a tag gets in the server menu and the status line.
+export const tagColor = (tag?: ServerTag) => (tag === 'production' ? 'error' : tag === 'staging' ? 'warning' : tag === 'development' ? 'success' : undefined)
+
+// Clipboard readers, tried in turn: macOS, Wayland, X11, Windows.
+export const PASTE_COMMANDS = [['pbpaste'], ['wl-paste', '-n'], ['xclip', '-o', '-selection', 'clipboard'], ['powershell.exe', '-NoProfile', '-Command', 'Get-Clipboard']]
+
+// Servers that send credentials need the person's OK before the first request: the host and
+// where the secret comes from, so a changed config (an agent can write it) never sends a secret
+// somewhere new on its own. The fingerprint changes when any of those change.
+// Anything that sends a secret or runs a program counts, with or without a username.
+export function credentialSource(s: Server): string | undefined {
+  const parts: string[] = []
+  if (s.username) parts.push(`user ${JSON.stringify(s.username)}`)
+  if (s.passwordCommand) parts.push(`password from the command ${JSON.stringify(s.passwordCommand)}`)
+  else if (s.passwordEnv) parts.push(`password from $${JSON.stringify(s.passwordEnv).slice(1, -1)}`)
+  else if (s.username || s.password) parts.push('password from servers.json')
+  if (s.headers && Object.keys(s.headers).length) parts.push(`headers ${Object.keys(s.headers).join(', ')}`)
+  return parts.length ? parts.join(', ') : undefined
+}
+
+export function credentialFingerprint(s: Server): string {
+  return JSON.stringify([baseUrl(s), s.insecure ?? false, s.username ?? '', s.passwordCommand ?? null, s.passwordEnv ?? null, s.password === undefined ? null : 'file', s.headers ?? null])
+}
+
+// The first entry wins when ids repeat (trimmed, as normalizeServer reads them).
+export function uniqueServers(list: Server[]): { servers: Server[]; duplicates: string[] } {
+  const seen = new Set<string>()
+  const servers: Server[] = []
+  const duplicates: string[] = []
+  for (const s of list) {
+    if (seen.has(s.id)) duplicates.push(s.id)
+    else {
+      seen.add(s.id)
+      servers.push(s)
+    }
+  }
+  return { servers, duplicates }
+}
+
+// Keys that repeat inside one JSON object: OpenSearch keeps the last one, so a prompt could
+// show one value while another is sent. Answers the first repeated key's path, or undefined.
+// Reads every top-level value (one for a body, several for _bulk / _msearch lines).
+export function duplicateKey(text: string): string | undefined {
+  let i = 0
+  const ws = () => {
+    while (i < text.length && /\s/.test(text[i]!)) i++
+  }
+  const str = (): string => {
+    let out = ''
+    i++
+    while (i < text.length && text[i] !== '"') {
+      if (text[i] === '\\') i++
+      out += text[i] ?? ''
+      i++
+    }
+    i++
+    return out
+  }
+  // Returns a repeated key path found inside the value at i, or undefined; moves i past it.
+  const value = (path: string): string | undefined => {
+    ws()
+    const c = text[i]
+    if (c === '{') {
+      i++
+      const keys = new Set<string>()
+      for (;;) {
+        ws()
+        if (text[i] === '}') {
+          i++
+          return undefined
+        }
+        if (text[i] !== '"') return undefined
+        const k = str()
+        if (keys.has(k)) return path ? `${path}.${k}` : k
+        keys.add(k)
+        ws()
+        if (text[i] === ':') i++
+        const inner = value(path ? `${path}.${k}` : k)
+        if (inner) return inner
+        ws()
+        if (text[i] === ',') i++
+        else if (text[i] === '}') {
+          i++
+          return undefined
+        } else return undefined
+      }
+    }
+    if (c === '[') {
+      i++
+      for (let n = 0; ; n++) {
+        ws()
+        if (text[i] === ']') {
+          i++
+          return undefined
+        }
+        const inner = value(`${path}[${n}]`)
+        if (inner) return inner
+        ws()
+        if (text[i] === ',') i++
+        else if (text[i] === ']') {
+          i++
+          return undefined
+        } else return undefined
+      }
+    }
+    if (c === '"') {
+      str()
+      return undefined
+    }
+    while (i < text.length && !/[\s,}\]]/.test(text[i]!)) i++
+    return undefined
+  }
+  while (i < text.length) {
+    const start = i
+    const found = value('')
+    if (found) return found
+    ws()
+    if (i === start) i++
+  }
+  return undefined
+}
+
+// The body exactly as curl will send it, and a one-line summary of _bulk / _msearch actions.
+export function sentBody(r: Pick<Request, 'path' | 'body'>): { body: string; summary?: string } {
+  const b = requestBody({ start: 0, end: 0, method: 'POST', path: r.path, body: r.body }).body ?? ''
+  if (!/(^|\/)_(bulk|msearch)/.test(r.path.split('?')[0]!)) return { body: b }
+  const counts: Record<string, number> = {}
+  for (const line of b.split('\n')) {
+    try {
+      const v = JSON.parse(line)
+      const k = v && typeof v === 'object' ? Object.keys(v)[0] : undefined
+      if (k && ['index', 'create', 'update', 'delete'].includes(k)) counts[k] = (counts[k] ?? 0) + 1
+    } catch {
+      /* not an action line */
+    }
+  }
+  const summary = Object.entries(counts).map(([k, n]) => `${n} ${k}`).join(', ')
+  return { body: b, summary: summary ? `bulk actions: ${summary}` : undefined }
+}
+
+// The rows a text takes at a width: its lines, each cut into width-long pieces.
+export function wrapRows(text: string, width: number): string[] {
+  const w = Math.max(10, width)
+  const out: string[] = []
+  for (const line of text.split('\n')) {
+    if (!line) out.push('')
+    for (let i = 0; i < line.length; i += w) out.push(line.slice(i, i + w))
+  }
+  return out
+}
+
+// Text as a prompt draws it: printable ASCII and newlines only, anything else as \uXXXX, so every
+// character takes exactly one column and nothing (wide, zero-width or bidi) hides what is sent.
+export const asciiView = (t: string) => t.replace(/[^\x20-\x7e\n]/g, c => '\\u' + c.charCodeAt(0).toString(16).padStart(4, '0'))
+
+// From offset `from` in an ASCII text, the rows that fit `height` rows of `width` columns, and the
+// offset just after the last character shown. Reading moves only forward, one shown page at a time.
+export function pageFrom(text: string, from: number, width: number, height: number): { rows: string[]; end: number } {
+  const w = Math.max(10, width)
+  const rows: string[] = []
+  let i = Math.max(0, from)
+  while (rows.length < height && i < text.length) {
+    const nl = text.indexOf('\n', i)
+    const lineEnd = nl < 0 ? text.length : nl
+    const piece = text.slice(i, Math.min(lineEnd, i + w))
+    rows.push(piece)
+    i += piece.length
+    if (i === lineEnd && nl >= 0) i++
+  }
+  return { rows, end: i }
 }

@@ -2,9 +2,10 @@
 // change to the hooks module; a new `rev` in props replaces the text.
 import type { ClientModule, ClientKeyEvent } from 'claude-code'
 
-type Props = { text: string; rev: number; height: number; row: number; paste?: { id: number; text: string }; indices?: string[]; scroll?: { id: number; by: number } }
+type Props = { text: string; rev: number; height: number; row: number; paste?: { id: number; text: string }; indices?: string[]; scroll?: { id: number; by: number }; cmd?: { id: number; cmd: 'undo' | 'redo' } }
 type Pos = { row: number; col: number }
-type State = { lines: string[]; row: number; col: number; top: number; rev: number; anchor?: Pos; pasteId?: number; dragging?: boolean; sugSel?: number; sugHide?: string; scrollId?: number }
+type State = { lines: string[]; row: number; col: number; top: number; rev: number; anchor?: Pos; pasteId?: number; dragging?: boolean; sugSel?: number; sugHide?: string; scrollId?: number; cmdId?: number; hist?: Snap[]; fut?: Snap[]; group?: string }
+type Snap = { lines: string[]; row: number; col: number }
 
 const COLORS: Record<string, { color?: string; bold?: boolean; dimColor?: boolean }> = {
   method: { color: '#4ec9b0', bold: true },
@@ -64,10 +65,16 @@ function lex(line: string): [string, string][] {
   return out
 }
 
+// Control characters can't be drawn (the engine refuses the tree): tabs become two spaces,
+// the rest are dropped. Applies to typed keys, pastes and text written into the session file.
+const clean = (t: string) => t.replace(/\r\n?/g, '\n').replace(/\t/g, '  ').replace(/[\x00-\x08\x0b-\x1f\x7f]/g, '')
+
+export const suggestFreeInit = (text: string) => init({ text, rev: 0, height: 5, row: 0 })
+
 const init = (p: Props): State => {
-  const lines = p.text.split('\n')
+  const lines = clean(p.text).split('\n')
   const row = Math.min(Math.max(0, p.row), lines.length - 1)
-  return { lines, row, col: 0, top: Math.max(0, row - 2), rev: p.rev, pasteId: p.paste?.id, scrollId: p.scroll?.id }
+  return { lines, row, col: 0, top: Math.max(0, row - 2), rev: p.rev, pasteId: p.paste?.id, scrollId: p.scroll?.id, cmdId: p.cmd?.id }
 }
 
 const before = (a: Pos, b: Pos) => a.row < b.row || (a.row === b.row && a.col < b.col)
@@ -101,7 +108,7 @@ const insert = (s0: State, text: string): State => {
   const s = deleteSelection(s0)
   const lines = [...s.lines]
   const cur = lines[s.row]
-  const parts = text.replace(/\r\n?/g, '\n').split('\n')
+  const parts = clean(text).split('\n')
   const head = cur.slice(0, s.col)
   const tail = cur.slice(s.col)
   if (parts.length === 1) {
@@ -115,31 +122,95 @@ const insert = (s0: State, text: string): State => {
 
 type Suggest = { start: number; prefix: string; items: string[]; id: string }
 
-// Index names for the path being typed on a request line: `GET logs-2|`, `POST a,b|/_search`.
-export const suggest = (s: State, names: readonly string[]): Suggest | undefined => {
-  if (!names.length || s.anchor) return undefined
-  const head = s.lines[s.row].slice(0, s.col)
-  const m = /^(\s*(?:GET|POST|PUT|DELETE|HEAD|PATCH)\s+\/?(?:[^\s/?,]*,)*)([^\s/?,]+)$/i.exec(head)
-  if (!m) return undefined
-  const prefix = m[2]!
+const METHODS = ['GET', 'POST', 'PUT', 'DELETE', 'HEAD']
+const ROOT = ['_search', '_count', '_msearch', '_mget', '_cat', '_cluster', '_nodes', '_aliases', '_alias', '_mapping', '_settings', '_stats', '_tasks', '_analyze', '_field_caps', '_validate', '_snapshot', '_ingest', '_index_template', '_component_template', '_template', '_resolve', '_pit', '_plugins', '_sql', '_security']
+const AFTER: Record<string, string[]> = {
+  _cat: ['indices', 'aliases', 'health', 'nodes', 'shards', 'count', 'allocation', 'segments', 'recovery', 'thread_pool', 'templates', 'pending_tasks', 'plugins', 'master', 'cluster_manager', 'nodeattrs', 'repositories', 'snapshots', 'tasks', 'fielddata'],
+  _cluster: ['health', 'state', 'stats', 'settings', 'pending_tasks', 'allocation'],
+  _nodes: ['stats', 'info', 'hot_threads', 'usage'],
+  _search: ['scroll', 'point_in_time', 'template'],
+  _validate: ['query'],
+  _resolve: ['index'],
+  _ingest: ['pipeline'],
+}
+const INDEX = ['_search', '_count', '_mapping', '_settings', '_doc', '_source', '_explain', '_validate', '_field_caps', '_stats', '_alias', '_aliases', '_mget', '_msearch', '_termvectors', '_search_shards', '_pit', '_refresh', '_analyze', '_segments', '_recovery']
+const PARAMS = ['v', 'pretty', 'format=json', 'human', 's=', 'h=', 'size=', 'from=', 'q=', 'filter_path=', 'expand_wildcards=', 'ignore_unavailable=', 'scroll=', 'keep_alive=', 'timeout=', 'track_total_hits=', 'error_trace', 'bytes=', 'time=']
+const DSL = ['query', 'bool', 'must', 'should', 'filter', 'must_not', 'minimum_should_match', 'match', 'match_phrase', 'match_phrase_prefix', 'multi_match', 'term', 'terms', 'range', 'gte', 'gt', 'lte', 'lt', 'exists', 'field', 'fields', 'wildcard', 'prefix', 'regexp', 'fuzzy', 'ids', 'nested', 'path', 'query_string', 'simple_query_string', 'aggs', 'aggregations', 'size', 'from', 'sort', 'order', 'asc', 'desc', '_source', 'includes', 'excludes', 'track_total_hits', 'highlight', 'post_filter', 'script', 'script_score', 'function_score', 'boost', 'date_histogram', 'calendar_interval', 'fixed_interval', 'histogram', 'interval', 'avg', 'sum', 'min', 'max', 'cardinality', 'value_count', 'stats', 'extended_stats', 'top_hits', 'percentiles', 'composite', 'sources', 'after', 'search_after', 'collapse', 'explain', 'timeout', 'knn', 'k', 'num_candidates', 'pit', 'keep_alive', 'id']
+
+const rank = (names: readonly string[], prefix: string) => {
   const low = prefix.toLowerCase()
-  const starts = names.filter(n => n.toLowerCase().startsWith(low) && n !== prefix)
-  const inside = names.filter(n => !n.toLowerCase().startsWith(low) && n.toLowerCase().includes(low))
-  const items = [...starts, ...inside].slice(0, 8)
+  const starts = names.filter(n => n.toLowerCase().startsWith(low) && n.toLowerCase() !== low)
+  const inside = low ? names.filter(n => !n.toLowerCase().startsWith(low) && n.toLowerCase().includes(low)) : []
+  return [...new Set([...starts, ...inside])]
+}
+
+// What fits where the cursor is: a method at the start of a request line; on the path, index names,
+// endpoints (`_search`, `_cat/…`) and query parameters; inside a JSON key, query DSL words.
+export const suggest = (s: State, names: readonly string[]): Suggest | undefined => {
+  if (s.anchor) return undefined
+  const head = s.lines[s.row]!.slice(0, s.col)
+  let start = s.col
+  let prefix = ''
+  let items: string[] = []
+  const req = /^(\s*)(GET|POST|PUT|DELETE|HEAD|PATCH)(\s+)(\S*)$/i.exec(head)
+  if (/^[A-Za-z]+$/.test(head)) {
+    prefix = head
+    items = rank(METHODS, prefix)
+  } else if (req) {
+    const path = req[4]!
+    const q = path.indexOf('?')
+    if (q >= 0) {
+      prefix = /[^?&]*$/.exec(path)![0]
+      items = rank(PARAMS, prefix)
+    } else {
+      const segs = path.replace(/^\//, '').split('/')
+      const cur = segs.pop()!
+      prefix = /[^,]*$/.exec(cur)![0]
+      if (!prefix && !(path === '' || path.endsWith('/') || path.endsWith(','))) return undefined
+      const first = segs[0]
+      if (!segs.length) items = prefix.startsWith('_') ? rank(ROOT, prefix) : rank([...names, ...(prefix ? [] : ROOT)], prefix)
+      else if (first?.startsWith('_')) items = rank(AFTER[segs[segs.length - 1]!] ?? [], prefix)
+      else if (segs.length === 1) items = rank(INDEX, prefix)
+      else items = rank(AFTER[segs[segs.length - 1]!] ?? [], prefix)
+    }
+  } else {
+    // A key opens after `{`, `,` or at the start of a line; after `:` it is a value.
+    const key = /"([A-Za-z_]*)$/.exec(head)
+    const before = key ? head.slice(0, head.length - key[1]!.length - 1) : ''
+    if (!key || (before.match(/"/g)?.length ?? 0) % 2 === 1 || !/(^|[{,])\s*$/.test(before)) return undefined
+    prefix = key[1]!
+    if (!prefix) return undefined
+    items = rank(DSL, prefix)
+  }
+  start = s.col - prefix.length
+  items = items.slice(0, 8)
   if (!items.length) return undefined
-  const id = `${s.row}:${m[1]!.length}:${prefix}`
+  const id = `${s.row}:${start}:${prefix}`
   if (s.sugHide === id) return undefined
-  return { start: m[1]!.length, prefix, items, id }
+  return { start, prefix, items, id }
 }
 
 const Editor: ClientModule<Props, State> = (props, surface) => {
   const { Box, Text } = surface.elements
-  let st: State = surface.state && surface.state.rev === props.rev ? surface.state : init(props)
+  const prev = surface.state
+  let st: State =
+    prev && prev.rev === props.rev
+      ? prev
+      : prev
+        ? { ...init(props), hist: [...(prev.hist ?? []), { lines: prev.lines, row: prev.row, col: prev.col }].slice(-200), fut: [] }
+        : init(props)
   const height = Math.max(1, props.height)
   const gutter = String(st.lines.length).length + 3
 
-  const commit = (next: State, type = 'edit') => {
+  const commit = (next: State, type = 'edit', group = '') => {
     if (type === 'edit' && next.sugSel === st.sugSel) next.sugSel = 0
+    if (type === 'edit' && next.lines !== st.lines) {
+      // Typing on one line is one undo step; any other edit is its own step.
+      const same = group === 'type' && st.group === 'type' && next.row === st.row
+      next.hist = same ? st.hist : [...(st.hist ?? []), { lines: st.lines, row: st.row, col: st.col }].slice(-200)
+      next.fut = []
+      next.group = group
+    } else if (type === 'cursor') next.group = ''
     if (next.row < next.top) next.top = next.row
     if (next.row >= next.top + height) next.top = next.row - height + 1
     surface.setState(next)
@@ -150,6 +221,30 @@ const Editor: ClientModule<Props, State> = (props, surface) => {
   if (props.scroll && props.scroll.id !== st.scrollId) {
     const maxTop = Math.max(0, st.lines.length - height)
     st = { ...st, top: Math.max(0, Math.min(maxTop, st.top + props.scroll.by)), scrollId: props.scroll.id }
+    surface.setState(st)
+  }
+
+  const undo = (s: State): State | undefined => {
+    const h = s.hist ?? []
+    if (!h.length) return undefined
+    const back = h[h.length - 1]!
+    const next: State = { ...s, ...back, anchor: undefined, hist: h.slice(0, -1), fut: [...(s.fut ?? []), { lines: s.lines, row: s.row, col: s.col }], group: '' }
+    commit(next, 'restore')
+    return next
+  }
+  const redo = (s: State): State | undefined => {
+    const f = s.fut ?? []
+    if (!f.length) return undefined
+    const fwd = f[f.length - 1]!
+    const next: State = { ...s, ...fwd, anchor: undefined, fut: f.slice(0, -1), hist: [...(s.hist ?? []), { lines: s.lines, row: s.row, col: s.col }], group: '' }
+    commit(next, 'restore')
+    return next
+  }
+
+  // Undo / redo pressed on the pane's buttons arrive once each.
+  if (props.cmd && props.cmd.id !== st.cmdId) {
+    st = { ...st, cmdId: props.cmd.id }
+    st = (props.cmd.cmd === 'undo' ? undo(st) : redo(st)) ?? st
     surface.setState(st)
   }
 
@@ -186,6 +281,14 @@ const Editor: ClientModule<Props, State> = (props, surface) => {
       return
     }
     if ((k.ctrl || k.meta) && key === 'l') return surface.post({ type: 'format', text: text(), row: s.row })
+    if ((k.ctrl || k.meta) && (key === 'z' || key === 'Z')) {
+      void (k.shift || key === 'Z' ? redo(s) : undo(s))
+      return
+    }
+    if ((k.ctrl || k.meta) && key === 'y') {
+      void redo(s)
+      return
+    }
     if ((k.ctrl || k.meta) && key === 'a') {
       const last = s.lines.length - 1
       return commit({ ...s, anchor: { row: 0, col: 0 }, row: last, col: s.lines[last].length }, 'cursor')
@@ -292,7 +395,7 @@ const Editor: ClientModule<Props, State> = (props, surface) => {
     if (!range(s) && typed.length === 1 && (typed === '}' || typed === ']' || typed === '"') && line[s.col] === typed) {
       return commit({ ...s, col: s.col + 1 }, 'cursor')
     }
-    return commit(insert(s, typed))
+    return commit(insert(s, typed), 'edit', typed.length === 1 && typed !== ' ' ? 'type' : '')
   })
 
   surface.onPointer(ev => {
