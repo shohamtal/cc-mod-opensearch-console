@@ -1,7 +1,7 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register, Timer } from 'claude-code'
 
-import type { OsPending, OsResult, OsServer, OsUnlock, OsView } from '../types'
+import type { OsConfirm, OsPending, OsResult, OsServer, OsUnlock, OsView } from '../types'
 import {
   ancestorsOpen,
   buildLines,
@@ -24,6 +24,7 @@ import {
   baseUrl,
   tagColor,
   PASTE_COMMANDS,
+  COPY_COMMANDS,
   credentialSource,
   credentialFingerprint,
   uniqueServers,
@@ -131,6 +132,12 @@ let base = ''
 let sessionFile = ''
 let configFile = ''
 const seen: Record<string, number> = {}
+// The session file's text as this pane last read or wrote it: two writes within one mtime tick
+// still differ in content.
+const seenText: Record<string, string> = {}
+// The server id the session file (or the person's menu pick) asked for. When the config doesn't
+// have it (yet), the pane shows another entry but never sends to it or saves it in its place.
+let wantedServer = ''
 let saveTimer: Timer | undefined
 let viewerHeight = 20
 let editorBottom = 14
@@ -172,6 +179,8 @@ async function resolvePath($: EngineInterface, p: string, under: string): Promis
 }
 
 async function write($: EngineInterface, file: string, text: string) {
+  // Recorded before the write: a sync landing between the write and the stat knows it's ours.
+  seenText[file] = text
   await $.fs.write(file, text)
   seen[file] = (await $.fs.stat(file)).mtimeMs
 }
@@ -337,10 +346,27 @@ async function changed($: EngineInterface, file: string): Promise<boolean> {
 // The session file may name a server by its display name (older files): match it to an id.
 async function resolveServer($: EngineInterface) {
   const list = (await read($, servers)) ?? []
-  const cur = await read($, server)
-  if (!list.length || list.some(s => s.id === cur)) return
-  const byName = list.find(s => s.name === cur)
-  await update($, server, () => (byName ?? list[0]!).id)
+  if (!list.length) return
+  const want = wantedServer || (await read($, server))
+  const hit = list.find(s => s.id === want) ?? list.find(s => s.name === want)
+  if (hit) {
+    wantedServer = hit.id
+    if (hit.id !== (await read($, server))) await update($, server, () => hit.id)
+    return
+  }
+  if (!wantedServer) {
+    wantedServer = list[0]!.id
+    await update($, server, () => list[0]!.id)
+  } else {
+    const shown = await read($, server)
+    if (!list.some(s => s.id === shown)) await update($, server, () => list[0]!.id)
+  }
+}
+
+// The session asks for a server the config doesn't have: say so rather than send elsewhere.
+async function missingServer($: EngineInterface): Promise<string | undefined> {
+  const list = (await read($, servers)) ?? []
+  return wantedServer && list.length && !list.some(s => s.id === wantedServer) ? wantedServer : undefined
 }
 
 async function sync($: EngineInterface) {
@@ -358,22 +384,26 @@ async function sync($: EngineInterface) {
         ...(s.indices ? { indices: s.indices } : {}),
       })),
     )
-    const cur = await read($, server)
-    if (list.length && !list.some(s => s.id === cur)) {
-      const byName = list.find(s => s.name === cur)
-      await update($, server, () => (byName ?? list[0]!).id)
-    }
   }
-  if (await changed($, sessionFile)) {
+  // Changed by mtime or, within one mtime tick, by content; the pane's own last write is not a change.
+  const moved = await changed($, sessionFile)
+  const raw = moved || seenText[sessionFile] !== undefined ? await $.fs.read(sessionFile).catch(() => undefined) : undefined
+  if (raw !== undefined && raw !== seenText[sessionFile]) {
+    seenText[sessionFile] = raw
     // A prompt answers for the request it shows; any outside change to the console cancels it.
     if (await read($, confirm)) await update($, confirm, () => null)
-    const st = await readJson($, sessionFile)
+    let st: any
+    try {
+      st = raw === undefined ? undefined : JSON.parse(raw)
+    } catch {
+      st = undefined
+    }
     if (st) {
+      if (typeof st.server === 'string' && st.server) wantedServer = st.server
       if (typeof st.query === 'string' && st.query !== (await read($, query))) {
         await update($, query, () => st.query)
         await update($, rev, n => n + 1)
       }
-      if (typeof st.server === 'string' && st.server && st.server !== (await read($, server))) await update($, server, () => st.server)
       if (typeof st.cursorRow === 'number' && st.cursorRow !== (await read($, cursorRow))) {
         await update($, cursorRow, () => st.cursorRow)
         await update($, rev, n => n + 1)
@@ -392,8 +422,9 @@ async function sync($: EngineInterface) {
   if (await changed($, responseFile())) {
     const text = await $.fs.read(responseFile()).catch(() => undefined)
     const cur = await read($, result)
-    if (text !== undefined && text !== cur?.text) {
-      const meta = (await readJson($, sessionFile))?.lastRun ?? {}
+    const meta = (await readJson($, sessionFile))?.lastRun ?? {}
+    // Another run with the same body still brings its own status line.
+    if (text !== undefined && (text !== cur?.text || String(meta.at ?? '') !== cur?.at)) {
       const next: OsResult = {
         id: Date.now(),
         server: String(meta.server ?? ''),
@@ -431,9 +462,17 @@ async function attach($: EngineInterface, file?: string, config?: string): Promi
     await $.fs.write(nextFile, JSON.stringify({ server: first, cursorRow: 0, query: legacy ?? DEFAULT_CONSOLE }, null, 2) + '\n')
   }
   if (nextFile !== sessionFile || nextConfig !== configFile) {
+    // A save still pending for the old console lands there now, never in the new one.
+    if (saveTimer) {
+      saveTimer.cancel()
+      saveTimer = undefined
+      await saveSession($).catch(() => undefined)
+    }
     sessionFile = nextFile
     configFile = nextConfig
     for (const k of Object.keys(seen)) delete seen[k]
+    for (const k of Object.keys(seenText)) delete seenText[k]
+    wantedServer = ''
     await update($, paths, () => ({ file: nextFile, config: nextConfig }))
     await update($, result, () => null)
     await update($, view, () => EMPTY_VIEW)
@@ -442,11 +481,53 @@ async function attach($: EngineInterface, file?: string, config?: string): Promi
   return undefined
 }
 
-async function saveSession($: EngineInterface, extra: Record<string, unknown> = {}) {
-  if (!sessionFile) return
-  const old = (await readJson($, sessionFile)) ?? {}
-  const next = { ...old, server: await read($, server), cursorRow: await read($, cursorRow), query: await read($, query), ...extra }
-  await write($, sessionFile, JSON.stringify(next, null, 2) + '\n')
+// Closes the prompt only if it is still the one this drawing showed: a press on a prompt that an
+// outside change already cancelled, or replaced, does nothing.
+// The system clipboard first (pbcopy, wl-copy, xclip, clip.exe): the terminal's own route (OSC 52)
+// is off by default in iTerm2 and missing in Terminal.app, where it reports success and copies nothing.
+async function copyText($: EngineInterface, text: string): Promise<boolean> {
+  for (const argv of COPY_COMMANDS) {
+    const out = await $.process.run(argv, { stdin: text, timeoutMs: 5_000 }).catch(() => undefined)
+    if (out && out.exitCode === 0) return true
+  }
+  return (await $.ui.copy({ text })).isCopied
+}
+
+async function takePrompt($: EngineInterface, same: (c: OsConfirm | null) => boolean): Promise<boolean> {
+  let ok = false
+  await update($, confirm, c => {
+    if (!same(c ?? null)) return c
+    ok = true
+    return null
+  })
+  return ok
+}
+
+async function saveSession($: EngineInterface, extra: Record<string, unknown> = {}, file = sessionFile) {
+  if (!file) return
+  // Someone else (the agent, another editor) wrote the file since this pane last read or wrote it:
+  // their editor fields win, only `extra` (a run's lastRun, a menu pick) is merged in, and the pane
+  // reloads them. The mtime is read before the text, so a write in between counts as theirs.
+  const mtime = await $.fs.stat(file).then(st => st.mtimeMs, () => undefined)
+  const raw = await $.fs.read(file).catch(() => undefined)
+  let old: Record<string, unknown> = {}
+  try {
+    old = raw === undefined ? {} : (JSON.parse(raw) ?? {})
+  } catch {
+    old = {}
+  }
+  const external =
+    file !== sessionFile ||
+    (mtime !== undefined && seen[file] !== undefined && mtime !== seen[file]) ||
+    (raw !== undefined && seenText[file] !== undefined && raw !== seenText[file])
+  // A server the config lacks is saved as asked for, never as the entry shown in its place.
+  const mine = external ? {} : { server: wantedServer || (await read($, server)), cursorRow: await read($, cursorRow), query: await read($, query) }
+  await write($, file, JSON.stringify({ ...old, ...mine, ...extra }, null, 2) + '\n')
+  if (external && file === sessionFile) {
+    delete seen[file]
+    delete seenText[file]
+    await sync($)
+  }
 }
 
 function scheduleSave($: EngineInterface) {
@@ -506,6 +587,8 @@ async function run($: EngineInterface) {
   const text = await read($, query)
   const req = requestAt(text, await read($, cursorRow))
   if (!req) return $.ui.toast('No request in the console (a line like `GET index/_search`).')
+  const missing = await missingServer($)
+  if (missing) return $.ui.toast(`Not sent: this console asks for server "${missing}", which isn't in ${configFile}. Add it, or pick a server from the menu.`)
   const name = await read($, server)
   const target = await findServer($, name)
   if (!target) return $.ui.toast(`No server "${name}" in ${configFile}`)
@@ -543,6 +626,9 @@ async function send($: EngineInterface, pending: OsPending) {
   }
   if (!(await isTrusted($, target))) return askTrust($, target, pending, 'run')
   const req = { start: 0, end: 0, method: pending.method, path: pending.path, body: pending.body }
+  // The console this request belongs to: a switch to another session file meanwhile doesn't move it.
+  const file = sessionFile
+  const responsePath = responseFile()
   await update($, running, () => true)
   const started = Date.now()
   let next: OsResult
@@ -564,12 +650,15 @@ async function send($: EngineInterface, pending: OsPending) {
   } catch (err) {
     next = { id: Date.now(), server: target.name, method: req.method, path: req.path, status: 0, ms: Date.now() - started, text: String(err), error: String(err), at: new Date().toISOString() }
   }
-  await update($, result, () => next)
-  await update($, view, v => ({ ...EMPTY_VIEW, search: v?.search ?? '' }))
   await update($, running, () => false)
-  await write($, responseFile(), next.text)
+  if (file === sessionFile) {
+    await update($, result, () => next)
+    await update($, view, v => ({ ...EMPTY_VIEW, search: v?.search ?? '' }))
+  }
+  // lastRun first: a pane that sees the new response then reads the matching status line.
   const { text: _t, id: _i, ...meta } = next
-  await saveSession($, { lastRun: meta })
+  await saveSession($, { lastRun: meta }, file)
+  await write($, responsePath, next.text)
   if (next.error) $.ui.toast(`OpenSearch: ${next.error.slice(0, 200)}`)
 }
 
@@ -728,7 +817,9 @@ export const register: Register = on => {
     if (row < editorBottom) {
       await update($, editorScroll, () => ({ id: Date.now(), by }))
     } else {
-      await editView($, v => {
+      await editView($, (v0, m) => {
+        // Start from the window as drawn: a taller viewer shows rows above the stored top.
+        const v = keepVisible(v0, linesOf(m, v0).length)
         const top = Math.max(0, v.top + by)
         const cursor = Math.min(Math.max(v.cursor, top), top + viewerHeight - 1)
         return { ...v, top, cursor }
@@ -743,9 +834,10 @@ export const register: Register = on => {
       if (data.type !== 'run' && data.type !== 'copy' && (await read($, confirm))) await update($, confirm, () => null)
       if (typeof data.text === 'string') await update($, query, () => data.text)
       if (typeof data.row === 'number') await update($, cursorRow, () => data.row)
+      // A cut carries its text on the edit post; a copy has its own.
+      if (typeof data.copy === 'string') $.ui.toast((await copyText($, data.copy)) ? 'Copied' : 'Copy failed')
       if (data.type === 'copy') {
-        const copied = await $.ui.copy({ text: String(data.copy ?? '') })
-        $.ui.toast(copied.isCopied ? 'Copied' : `Copy failed: ${'reason' in copied ? copied.reason : ''}`)
+        // nothing more: the text and cursor were taken above
       } else if (data.type === 'paste') {
         for (const argv of PASTE_COMMANDS) {
           const out = await $.process.run(argv).catch(() => undefined)
@@ -767,7 +859,8 @@ export const register: Register = on => {
       }
     } else if (e.element === 'viewer') {
       if (data.type === 'click') {
-        await editView($, (v, m) => {
+        await editView($, (v0, m) => {
+          const v = keepVisible(v0, linesOf(m, v0).length)
           const lines = linesOf(m, v)
           const idx = v.top + Number(data.y)
           const l = lines[idx]
@@ -829,7 +922,7 @@ export const register: Register = on => {
     const extra = isMenu ? Math.max(1, list.length) + 2 : ask?.kind === 'trust' ? 6 : 0
     const editorHeight = Math.max(3, Math.floor((rows - fixed) * 0.4) - extra)
     viewerHeight = Math.max(4, rows - fixed - editorHeight)
-    editorBottom = 2 + editorHeight
+    editorBottom = 2 + extra + editorHeight
 
     let viewerProps: { lines: [string, string][][]; cursor: number; height: number; status: string }
     if (!r) {
@@ -928,7 +1021,9 @@ export const register: Register = on => {
                       await update($, server, () => sv.id)
                       await update($, menuOpen, () => false)
                       await update($, confirm, () => null)
-                      await saveSession($)
+                      // The person's pick wins over a session file someone else just wrote.
+                      wantedServer = sv.id
+                      await saveSession($, { server: sv.id })
                       void ensureIndices($).catch(() => undefined)
                     })()
                   }
@@ -984,7 +1079,7 @@ export const register: Register = on => {
                   onPress={() =>
                     void (async () => {
                       const req = ask.req
-                      await update($, confirm, () => null)
+                      if (!(await takePrompt($, c => c?.kind === 'write' && JSON.stringify(c.req) === JSON.stringify(req)))) return
                       await send($, req)
                     })().catch(() => undefined)
                   }
@@ -997,8 +1092,8 @@ export const register: Register = on => {
                   onPress={() =>
                     void (async () => {
                       const req = ask.req
+                      if (!(await takePrompt($, c => c?.kind === 'write' && JSON.stringify(c.req) === JSON.stringify(req)))) return
                       await update($, unlocked, l => [...(l ?? []).filter(u => u.id !== req.serverId), { id: req.serverId, url: req.url, fingerprint: req.fingerprint } as OsUnlock])
-                      await update($, confirm, () => null)
                       $.ui.toast(`${req.serverName}: writes unlocked until this session ends (🔓 locks again)`)
                       await send($, req)
                     })().catch(() => undefined)
@@ -1022,8 +1117,8 @@ export const register: Register = on => {
                 onPress={() =>
                   void (async () => {
                     const a = ask
+                    if (!(await takePrompt($, c => c?.kind === 'trust' && c.fingerprint === a.fingerprint && c.then === a.then && JSON.stringify(c.req) === JSON.stringify(a.req)))) return
                     await trust($, a.fingerprint)
-                    await update($, confirm, () => null)
                     if (a.then === 'run' && a.req) await send($, a.req)
                     else await refreshIndices($, a.serverId)
                   })().catch(() => undefined)
