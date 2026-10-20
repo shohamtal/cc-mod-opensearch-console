@@ -33,6 +33,8 @@ import {
 } from './lib'
 
 const PANE = 'opensearch'
+// The longest body the write prompt shows in full; longer ones can't be sent from a prompt.
+const BODY_LIMIT = 20_000
 const query = atom({ plugin: 'opensearch-console', key: 'query' } as const, '')
 const rev = atom({ plugin: 'opensearch-console', key: 'rev' } as const, 0)
 const cursorRow = atom({ plugin: 'opensearch-console', key: 'cursorRow' } as const, 0)
@@ -193,13 +195,18 @@ async function trust($: EngineInterface, fingerprint: string) {
 }
 
 async function isProduction($: EngineInterface, s: Server): Promise<boolean> {
-  const seen = (await read($, prodSeen)) ?? []
+  const seen = [...((await read($, prodSeen)) ?? []), ...(((await $.store.get('prodSeen')) as string[] | undefined) ?? [])]
   return s.tag === 'production' || seen.includes(`id:${s.id}`) || seen.includes(`url:${baseUrl(s)}`)
 }
 
 async function rememberProduction($: EngineInterface, list: Server[]) {
   const marks = list.filter(s => s.tag === 'production').flatMap(s => [`id:${s.id}`, `url:${baseUrl(s)}`])
-  if (marks.length) await update($, prodSeen, seen => [...new Set([...(seen ?? []), ...marks])])
+  if (!marks.length) return
+  await update($, prodSeen, seen => [...new Set([...(seen ?? []), ...marks])])
+  // Kept across sessions too: a production server stays one even if its tag is gone next time.
+  const kept = ((await $.store.get('prodSeen')) as string[] | undefined) ?? []
+  const next = [...new Set([...kept, ...marks])]
+  if (next.length !== kept.length) await $.store.set('prodSeen', next.slice(-500))
 }
 
 // A session unlock counts only for the server entry it was given to, unchanged.
@@ -645,7 +652,7 @@ export const register: Register = on => {
       const want = await resolvePath($, input.configfilepath, base)
       const real = (await $.fs.stat(want, { resolve: true }).catch(() => undefined))?.realPath ?? want
       const root = (await $.fs.stat(base, { resolve: true }).catch(() => undefined))?.realPath ?? base
-      if (!real.startsWith(root + '/')) return { result: `configfilepath must be inside ${base}/. Ask the user to open other configs with /opensearch --configfilepath.`, isError: true }
+      if (!real.startsWith(root + '/') || real.startsWith(root + '/sessions/')) return { result: `configfilepath must be inside ${base}/ (not sessions/). Ask the user to open other configs with /opensearch --configfilepath.`, isError: true }
     }
     const refused = await attach($, input.filepath, input.configfilepath)
     if (refused) return { result: refused, isError: true }
@@ -756,6 +763,8 @@ export const register: Register = on => {
     const isUnlocked = !!targetFull && (await isUnlockedNow($, targetFull))
     const bodyOpen = await read($, showBody)
     const ask = await read($, confirm)
+    // The send buttons appear only once the person can see the whole body.
+    const bodySeen = !!ask && ask.kind === 'write' && ask.req.sent.length <= BODY_LIMIT && (bodyOpen || ask.req.sent.length <= 160)
     const cmd = await read($, editorCmd)
     const help = await read($, showHelp)
     const pasted = await read($, paste)
@@ -766,7 +775,7 @@ export const register: Register = on => {
 
     const fixed = 11
     // An open menu or prompt sits under the toolbar; the editor gives up its rows.
-    const extra = isMenu ? Math.max(1, list.length) + 2 : ask ? (ask.kind === 'write' ? 7 + (ask.req.summary ? 1 : 0) + (bodyOpen ? Math.min(12, Math.ceil(ask.req.sent.length / 100)) : 0) : 6) : 0
+    const extra = isMenu ? Math.max(1, list.length) + 2 : ask ? (ask.kind === 'write' ? 7 + (ask.req.summary ? 1 : 0) + (bodyOpen ? Math.ceil(ask.req.sent.length / 100) : 0) : 6) : 0
     const editorHeight = Math.max(3, Math.floor((rows - fixed) * 0.4) - extra)
     viewerHeight = Math.max(4, rows - fixed - editorHeight)
     editorBottom = 2 + editorHeight
@@ -884,8 +893,10 @@ export const register: Register = on => {
             <Text>{`${ask.req.method} ${ask.req.url}/${ask.req.path.replace(/^\/+/, '')}`}</Text>
             {ask.req.summary ? <Text color="warning">{ask.req.summary}</Text> : null}
             {ask.req.sent ? (
-              bodyOpen || ask.req.sent.length <= 160 ? (
-                <Text wrap="wrap">{`body (as sent): ${ask.req.sent.slice(0, 4000)}${ask.req.sent.length > 4000 ? ` … and ${ask.req.sent.length - 4000} more characters` : ''}`}</Text>
+              ask.req.sent.length > BODY_LIMIT ? (
+                <Text color="error">{`body: ${ask.req.sent.length} characters, too long to review here, so it can't be sent from the console.`}</Text>
+              ) : bodyOpen || ask.req.sent.length <= 160 ? (
+                <Text wrap="wrap">{`body (as sent): ${ask.req.sent}`}</Text>
               ) : (
                 <Box flexDirection="row" gap={1}>
                   <Text dimColor wrap="truncate-end">{`body (as sent, ${ask.req.sent.length} characters): ${ask.req.sent.slice(0, 90).replace(/\n/g, ' ⏎ ')}…`}</Text>
@@ -895,21 +906,23 @@ export const register: Register = on => {
             ) : (
               <Text dimColor>no body</Text>
             )}
-            <Text dimColor>This request can change data. Run sends exactly what is shown here.</Text>
+            <Text dimColor>{bodySeen ? 'This request can change data. Run sends exactly what is shown here.' : 'Read the whole body (Show all) before you can run it.'}</Text>
             <Box flexDirection="row" gap={2} height={1}>
-              <Button
-                key="confirm-once"
-                label="Run this request once"
-                variant="primary"
-                onPress={() =>
-                  void (async () => {
-                    const req = ask.req
-                    await update($, confirm, () => null)
-                    await send($, req)
-                  })().catch(() => undefined)
-                }
-              />
-              {ask.req.production ? null : (
+              {bodySeen ? (
+                <Button
+                  key="confirm-once"
+                  label="Run this request once"
+                  variant="primary"
+                  onPress={() =>
+                    void (async () => {
+                      const req = ask.req
+                      await update($, confirm, () => null)
+                      await send($, req)
+                    })().catch(() => undefined)
+                  }
+                />
+              ) : null}
+              {bodySeen && !ask.req.production ? (
                 <Button
                   key="confirm-session"
                   label="Unlock for this session"
@@ -923,7 +936,7 @@ export const register: Register = on => {
                     })().catch(() => undefined)
                   }
                 />
-              )}
+              ) : null}
               <Button key="confirm-no" label="Cancel" onPress={() => void update($, confirm, () => null)} />
             </Box>
           </Box>

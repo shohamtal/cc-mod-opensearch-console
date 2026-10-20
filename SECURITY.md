@@ -12,7 +12,7 @@
 
 ## Hardening
 
-An agent with file access could edit the console's config or the mod's store of approved servers. The write and credential prompts limit what such an edit can do. For a firm boundary, deny edits to `~/.claude/mods/opensearch/servers.json`, `~/.claude/plugins/store/**` and `~/.curlrc` in your Claude Code permissions; the README shows the rule.
+An agent with file access could edit the console's config or the mod's store of approved servers. The write and credential prompts limit what such an edit can do. Deny edits to `~/.claude/mods/opensearch/servers.json`, `~/.claude/plugins/store/**` and `~/.curlrc` in your Claude Code permissions (the README shows the rule). That covers Claude Code's file tools; shell commands need Bash kept on approval.
 
 ## Reporting a vulnerability
 

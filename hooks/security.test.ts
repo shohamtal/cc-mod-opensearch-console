@@ -132,6 +132,29 @@ describe('session unlocks', () => {
   })
 })
 
+describe('long bodies', () => {
+  test('the send buttons appear only once the whole body is shown', async ($, on) => {
+    const w = world(on, [{ id: 'dev', name: 'Dev', host: '10.0.0.2' }])
+    const ui = await openConsole($)
+    const body = JSON.stringify({ query: { bool: { should: Array.from({ length: 300 }, (_, i) => ({ term: { id: `id-${i}` } })) } } })
+    await ui.post({ type: 'run', text: `POST idx/_delete_by_query\n${body}`, row: 0 }, { in: 'editor' })
+    expect(await ui.find({ key: 'confirm-once' })).toBeUndefined()
+    await ui.press({ key: 'show-body' })
+    expect(await ui.find({ key: 'confirm-once' })).toBeDefined()
+    expect(w.curls()).toEqual([])
+  })
+
+  test('a body too long to show can never be sent from the prompt', async ($, on) => {
+    const w = world(on, [{ id: 'dev', name: 'Dev', host: '10.0.0.2' }])
+    const ui = await openConsole($)
+    const body = JSON.stringify({ query: { ids: { values: Array.from({ length: 3000 }, (_, i) => `doc-${i}`) } } })
+    await ui.post({ type: 'run', text: `POST idx/_delete_by_query\n${body}`, row: 0 }, { in: 'editor' })
+    expect(await ui.find({ key: 'confirm-once' })).toBeUndefined()
+    expect(await ui.find({ key: 'show-body' })).toBeUndefined()
+    expect(w.curls()).toEqual([])
+  })
+})
+
 describe('credentials', () => {
   test('a server with credentials asks first; nothing runs, not even its passwordCommand, until Allow', async ($, on) => {
     const w = world(on, [{ id: 'eu', name: 'EU', host: 'search.example.com', https: true, port: 443, username: 'reader', passwordCommand: ['pass', 'os/eu'] }])
@@ -148,6 +171,13 @@ describe('credentials', () => {
     const w = world(on, [{ id: 'eu', name: 'EU', host: 'h', username: 'u', passwordCommand: ['sh', '-c', 'evil'] }])
     await $.tool.call({ tool: TOOL, action: 'open', filepath: 'agent.json' } as any)
     expect(w.runs).toEqual([])
+  })
+
+  test('the agent tool refuses a config inside sessions/', async ($, on) => {
+    const w = world(on, [{ id: 'x', name: 'X', host: 'h' }])
+    w.files.set(`${BASE}/sessions/evil-servers.json`, JSON.stringify({ servers: [{ id: 'x', name: 'X', host: 'evil' }] }))
+    const r: any = await $.tool.call({ tool: TOOL, action: 'open', configfilepath: 'sessions/evil-servers.json' } as any)
+    expect(String(r?.result)).toContain('not sessions/')
   })
 
   test('the agent tool refuses a config outside the mod folder', async ($, on) => {

@@ -387,7 +387,7 @@ export function normalizeServer(raw: unknown, defaultPort = 9200): Server | unde
   }
   const id = str(r.id) ?? str(r.name)
   if (!id || !host) return undefined
-  const s: Server = { id, name: str(r.name) ?? id, host, port: port ?? defaultPort, https: https ?? false }
+  const s: Server = { id, name: str(r.name) ?? id, host: host.toLowerCase(), port: port ?? defaultPort, https: https ?? false }
   if (r.insecure === true) s.insecure = true
   if (str(r.username)) s.username = str(r.username)
   if (typeof r.password === 'string') s.password = r.password

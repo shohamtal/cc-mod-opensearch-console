@@ -166,7 +166,7 @@ Request bodies go as `data-raw`, so a body starting with `@` is never read from 
 
 ### Recommended: stop agents from editing the console's config
 
-The console treats its config and its own store as yours. An agent with file access could edit them, and the prompts above limit what that can do. For a firm boundary, add a deny rule to `~/.claude/settings.json`; Claude Code then refuses any edit to these paths:
+The console treats its config and its own store as yours. An agent with file access could edit them; the prompts above limit what that can do. A deny rule in `~/.claude/settings.json` makes Claude Code refuse edits to these paths through its file tools:
 
 ```json
 {
@@ -180,7 +180,7 @@ The console treats its config and its own store as yours. An agent with file acc
 }
 ```
 
-`Edit` rules cover every built-in tool that edits files. Agents still write their session files under `~/.claude/mods/opensearch/sessions/`.
+`Edit` rules cover Claude Code's file-editing tools, not shell commands. If agents can run Bash without asking you, they can still write these files, so keep Bash on approval (or deny writes there too). Agents still write their session files under `~/.claude/mods/opensearch/sessions/`.
 
 ## Keys
 
