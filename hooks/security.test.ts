@@ -304,3 +304,16 @@ describe('clipboard', () => {
     expect(w.curls()).toEqual([])
   })
 })
+
+describe('session file with a JSON typo', () => {
+  test('is never overwritten by the pane, and the pane says why', async ($, on) => {
+    const w = world(on, [{ id: 'local', name: 'Local', host: '127.0.0.1' }])
+    const ui = await openConsole($)
+    const file = `${BASE}/sessions/s1.json`
+    const typo = '{"server":"local","query":"GET handwritten",}'
+    w.files.set(file, typo)
+    await ui.post({ type: 'cursor', text: 'GET pane', row: 0 }, { in: 'editor' })
+    await ui.post({ type: 'run', text: 'GET pane', row: 0 }, { in: 'editor' })
+    expect(w.files.get(file)).toBe(typo)
+  })
+})

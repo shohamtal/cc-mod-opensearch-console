@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.2.3
+
+- **A session file with a JSON typo is never overwritten:** the pane says it can't save until you fix the file, instead of replacing your hand edit (and `lastRun`) with its own state.
+- **One save at a time:** a timed save and a finished request no longer overlap and mistake each other's write for an outside change.
+- **Windows:** `clip.exe` runs from `System32` by full path, like `cmd.exe` and `curl.exe`.
+
 ## 0.2.2
 
 Fixes from an external review, all reproduced by tests:
