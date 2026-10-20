@@ -140,11 +140,32 @@ let matchCache: { key: string; paths: string[] } | undefined
 const responseFile = () => sessionFile.replace(/(\.json)?$/, '.response.json')
 const indicesFile = () => `${base}/indices.json`
 
+async function onWindows($: EngineInterface): Promise<boolean> {
+  return (await $.env.get('OS')) === 'Windows_NT'
+}
+
 async function homeDir($: EngineInterface): Promise<string> {
-  return homeOf(await $.env.get('HOME'), await $.env.get('USERPROFILE'))
+  return homeOf(await $.env.get('HOME'), await $.env.get('USERPROFILE'), await onWindows($))
+}
+
+// A Windows program by full path, so a same-named .exe in the working folder never runs instead.
+async function system32($: EngineInterface, exe: string): Promise<string> {
+  return `${toSlash((await $.env.get('SystemRoot')) || 'C:\\Windows').replace(/\/+$/, '')}/System32/${exe}`
+}
+
+// curl: Windows' own curl.exe when it's there, else the one on PATH.
+async function curlBin($: EngineInterface): Promise<string> {
+  if (!(await onWindows($))) return 'curl'
+  const own = await system32($, 'curl.exe')
+  return (await $.fs.exists(own).catch(() => false)) ? own : 'curl'
 }
 
 async function resolvePath($: EngineInterface, p: string, under: string): Promise<string> {
+  if (!(await onWindows($))) {
+    if (p.startsWith('~/')) return (await homeDir($)) + p.slice(1)
+    if (p.startsWith('/')) return p
+    return `${under}/${p}`
+  }
   if (p.startsWith('~/') || p.startsWith('~\\')) return (await homeDir($)) + toSlash(p.slice(1))
   if (isAbsolutePath(p)) return toSlash(p)
   return `${under}/${toSlash(p)}`
@@ -181,8 +202,8 @@ async function passwordOf($: EngineInterface, s: Server): Promise<string> {
     const out = await $.process.run(['printenv', s.passwordEnv]).catch(() => undefined)
     if (out) return out.exitCode === 0 ? out.stdout.replace(/\r?\n$/, '') : ''
     // No printenv (Windows without Git Bash): cmd's `set`, for a plain variable name only.
-    if (!ENV_NAME.test(s.passwordEnv)) return ''
-    const set = await $.process.run(['cmd.exe', '/d', '/c', 'set', s.passwordEnv]).catch(() => undefined)
+    if (!(await onWindows($)) || !ENV_NAME.test(s.passwordEnv)) return ''
+    const set = await $.process.run([await system32($, 'cmd.exe'), '/d', '/c', 'set', s.passwordEnv]).catch(() => undefined)
     return set && set.exitCode === 0 ? fromCmdSet(set.stdout, s.passwordEnv) ?? '' : ''
   }
   return s.password ?? ''
@@ -436,7 +457,7 @@ function scheduleSave($: EngineInterface) {
 
 async function catNames($: EngineInterface, creds: ServerCreds, path: string, field: string): Promise<string[]> {
   // -q first: curl must not read ~/.curlrc (a proxy or trace file there would see credentials).
-  const out = await $.process.run(['curl', '-q', '-K', '-'], {
+  const out = await $.process.run([await curlBin($), '-q', '-K', '-'], {
     stdin: curlConfig(creds, { start: 0, end: 0, method: 'GET', path, body: '' }),
     timeoutMs: 30_000,
   })
@@ -525,7 +546,7 @@ async function send($: EngineInterface, pending: OsPending) {
   let next: OsResult
   try {
     const creds = await credsFor($, target)
-    const out = await $.process.run(['curl', '-q', '-K', '-'], { stdin: curlConfig(creds, req), timeoutMs: 130_000 })
+    const out = await $.process.run([await curlBin($), '-q', '-K', '-'], { stdin: curlConfig(creds, req), timeoutMs: 130_000 })
     const parsed = parseCurlOutput(out.stdout)
     next = {
       id: Date.now(),
@@ -664,8 +685,10 @@ export const register: Register = on => {
     if (input.configfilepath) {
       if (!base) await ensureBase($)
       const want = await resolvePath($, input.configfilepath, base)
-      const real = toSlash((await $.fs.stat(want, { resolve: true }).catch(() => undefined))?.realPath ?? want)
-      const root = toSlash((await $.fs.stat(base, { resolve: true }).catch(() => undefined))?.realPath ?? base)
+      // Backslashes are separators only on Windows; elsewhere `opensearch\\x` is a sibling folder.
+      const slash = (await onWindows($)) ? toSlash : (p: string) => p
+      const real = slash((await $.fs.stat(want, { resolve: true }).catch(() => undefined))?.realPath ?? want)
+      const root = slash((await $.fs.stat(base, { resolve: true }).catch(() => undefined))?.realPath ?? base)
       if (!real.startsWith(root + '/') || real.toLowerCase().startsWith((root + '/sessions/').toLowerCase())) return { result: `configfilepath must be inside ${base}/ (not sessions/). Ask the user to open other configs with /opensearch --configfilepath.`, isError: true }
     }
     const refused = await attach($, input.filepath, input.configfilepath)

@@ -419,9 +419,11 @@ export function isAbsolutePath(p: string): boolean {
   return /^(?:\/|[A-Za-z]:[\\/]|\\\\)/.test(p)
 }
 
-// The home folder: HOME, or USERPROFILE on Windows where HOME is usually unset.
-export function homeOf(home: string | undefined, userProfile: string | undefined): string {
-  return toSlash(home || userProfile || '').replace(/\/+$/, '')
+// The home folder: HOME, or USERPROFILE on Windows where HOME is usually unset. Backslashes are
+// separators only on Windows; on macOS and Linux they're part of a file name and stay.
+export function homeOf(home: string | undefined, userProfile: string | undefined, windows: boolean): string {
+  const h = home || (windows ? userProfile : '') || ''
+  return (windows ? toSlash(h) : h).replace(/\/+$/, '')
 }
 
 // `set NAME` in cmd prints every variable starting with NAME; this picks the exact one.

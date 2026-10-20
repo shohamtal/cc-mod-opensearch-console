@@ -14,7 +14,7 @@ function world(on: On, servers: unknown[], opts: { windows?: boolean } = {}) {
   const runs: { argv: readonly string[]; stdin?: string }[] = []
   let tick = 1
   const mtimes = new Map<string, number>()
-  mock.env(on, { HOME })
+  mock.env(on, opts.windows ? { HOME, OS: 'Windows_NT', SystemRoot: 'C:\\Windows' } : { HOME })
   mock.store(on)
   const clock = mock.clock(on)
   on('fs.exists', ($, e) => ({ value: files.has(e.path) }))
@@ -38,7 +38,7 @@ function world(on: On, servers: unknown[], opts: { windows?: boolean } = {}) {
     const isCurl = e.argv[0] === 'curl'
     // On Windows without Git Bash there is no printenv; cmd's `set` lists matching variables.
     if (opts.windows && e.argv[0] === 'printenv') throw new Error('ENOENT printenv')
-    const other = opts.windows && e.argv[0] === 'cmd.exe' ? 'OS_PW_OLD=old\r\nOS_PW=pw\r\n' : 'secret-from-command\n'
+    const other = opts.windows && e.argv[0] === 'C:/Windows/System32/cmd.exe' ? 'OS_PW_OLD=old\r\nOS_PW=pw\r\n' : 'secret-from-command\n'
     return { value: { exitCode: 0, stdout: isCurl ? '{"ok":true}\n__OSCONSOLE__200 0.01' : other, stderr: '', isStdoutTruncated: false, isStderrTruncated: false } } as any
   })
   const curls = () => runs.filter(r => r.argv[0] === 'curl')
@@ -286,8 +286,8 @@ describe('Windows password variables', () => {
     const trust = await ui.find({ key: 'trust-yes' })
     expect(trust).toBeDefined()
     await ui.press({ key: 'trust-yes' })
-    expect(w.runs.map(r => r.argv[0])).toEqual(['printenv', 'cmd.exe', 'curl'])
-    expect(w.runs[1]!.argv).toEqual(['cmd.exe', '/d', '/c', 'set', 'OS_PW'])
+    expect(w.runs.map(r => r.argv[0])).toEqual(['printenv', 'C:/Windows/System32/cmd.exe', 'curl'])
+    expect(w.runs[1]!.argv).toEqual(['C:/Windows/System32/cmd.exe', '/d', '/c', 'set', 'OS_PW'])
     expect(w.curls()[0]!.stdin).toContain('pw')
     expect(w.curls()[0]!.stdin).not.toContain('old')
   })

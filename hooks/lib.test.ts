@@ -193,10 +193,12 @@ describe('the write prompt draws one column per character', () => {
 
 describe('Windows', () => {
   test('home falls back to USERPROFILE, with forward slashes', async () => {
-    expect(homeOf('/Users/dev', 'C:\\Users\\dev')).toBe('/Users/dev')
-    expect(homeOf(undefined, 'C:\\Users\\dev')).toBe('C:/Users/dev')
-    expect(homeOf('', 'C:\\Users\\dev\\')).toBe('C:/Users/dev')
-    expect(homeOf(undefined, undefined)).toBe('')
+    expect(homeOf('/Users/dev', 'C:\\Users\\dev', false)).toBe('/Users/dev')
+    expect(homeOf(undefined, 'C:\\Users\\dev', true)).toBe('C:/Users/dev')
+    expect(homeOf('', 'C:\\Users\\dev\\', true)).toBe('C:/Users/dev')
+    expect(homeOf(undefined, 'C:\\Users\\dev', false)).toBe('')
+    expect(homeOf('/home/a\\b', undefined, false)).toBe('/home/a\\b')
+    expect(homeOf(undefined, undefined, true)).toBe('')
   })
   test('drive and UNC paths are absolute; backslashes become slashes', async () => {
     for (const p of ['/etc/x', 'C:\\x\\y.json', 'c:/x', '\\\\srv\\share\\x']) expect(isAbsolutePath(p)).toBe(true)

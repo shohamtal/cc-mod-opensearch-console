@@ -77,6 +77,15 @@ describe('the console tool reads its arguments from the call', () => {
   })
 })
 
+describe('backslashes off Windows', () => {
+  test('a sibling folder named opensearch\\x is not inside the mod folder', async ($, on) => {
+    const w = world(on)
+    w.files.set(`${HOME}/.claude/mods/opensearch\\x/c.json`, JSON.stringify({ servers: [] }))
+    const r = await $.tool.call({ tool: TOOL, action: 'status', configfilepath: '~/.claude/mods/opensearch\\x/c.json' } as any)
+    expect((r as any).isError).toBe(true)
+  })
+})
+
 describe('Windows', () => {
   // No HOME, a USERPROFILE with backslashes, real paths reported with backslashes, and no printenv.
   function windows(on: On) {
@@ -85,7 +94,7 @@ describe('Windows', () => {
     const runs: string[][] = []
     // This test runs on macOS / Linux, where the engine resolves `C:/…` against the working folder.
     const win = (p: string) => p.replace(/^.*?(?=[A-Za-z]:\/)/, '')
-    mock.env(on, { USERPROFILE: 'C:\\Users\\dev' })
+    mock.env(on, { USERPROFILE: 'C:\\Users\\dev', OS: 'Windows_NT' })
     on('fs.exists', ($, e) => ({ value: files.has(win(e.path)) }))
     on('fs.read', ($, e) => {
       if (!files.has(win(e.path))) throw new Error(`ENOENT ${e.path}`)
