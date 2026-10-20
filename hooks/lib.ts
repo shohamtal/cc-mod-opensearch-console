@@ -387,6 +387,8 @@ export function normalizeServer(raw: unknown, defaultPort = 9200): Server | unde
   }
   const id = str(r.id) ?? str(r.name)
   if (!id || !host) return undefined
+  // A host is a name or an address, never text that could garble a prompt.
+  if (!/^[A-Za-z0-9._\-:[\]]+$/.test(host)) return undefined
   const s: Server = { id, name: str(r.name) ?? id, host: host.toLowerCase(), port: port ?? defaultPort, https: https ?? false }
   if (r.insecure === true) s.insecure = true
   if (str(r.username)) s.username = str(r.username)
@@ -416,8 +418,8 @@ export const PASTE_COMMANDS = [['pbpaste'], ['wl-paste', '-n'], ['xclip', '-o', 
 export function credentialSource(s: Server): string | undefined {
   const parts: string[] = []
   if (s.username) parts.push(`user ${s.username}`)
-  if (s.passwordCommand) parts.push(`password from the command \`${s.passwordCommand.join(' ')}\``)
-  else if (s.passwordEnv) parts.push(`password from $${s.passwordEnv}`)
+  if (s.passwordCommand) parts.push(`password from the command ${JSON.stringify(s.passwordCommand)}`)
+  else if (s.passwordEnv) parts.push(`password from $${JSON.stringify(s.passwordEnv).slice(1, -1)}`)
   else if (s.username || s.password) parts.push('password from servers.json')
   if (s.headers && Object.keys(s.headers).length) parts.push(`headers ${Object.keys(s.headers).join(', ')}`)
   return parts.length ? parts.join(', ') : undefined
@@ -541,4 +543,15 @@ export function sentBody(r: Pick<Request, 'path' | 'body'>): { body: string; sum
   }
   const summary = Object.entries(counts).map(([k, n]) => `${n} ${k}`).join(', ')
   return { body: b, summary: summary ? `bulk actions: ${summary}` : undefined }
+}
+
+// The rows a text takes at a width: its lines, each cut into width-long pieces.
+export function wrapRows(text: string, width: number): string[] {
+  const w = Math.max(10, width)
+  const out: string[] = []
+  for (const line of text.split('\n')) {
+    if (!line) out.push('')
+    for (let i = 0; i < line.length; i += w) out.push(line.slice(i, i + w))
+  }
+  return out
 }

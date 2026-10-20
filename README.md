@@ -140,7 +140,7 @@ The console sends only requests that read:
 Anything else (`PUT`, `PATCH`, `_bulk`, `_doc`, `_update`, `_delete_by_query`, `_reindex`, `_aliases`, `_close`, …) opens a prompt that shows the **exact request** as it will be sent:
 
 - **Method and full URL.**
-- **Body, byte for byte**, with **Show all** for long bodies.
+- **Body, byte for byte**, in pages that fit the pane. The send buttons appear only on the last page.
 - **A count of `_bulk` actions** (for example `1 index, 2 delete`).
 
 A body that repeats a JSON key is refused, since only the last copy would count.
@@ -172,7 +172,7 @@ The console treats its config and its own store as yours. An agent with file acc
 {
   "permissions": {
     "deny": [
-      "Edit(~/.claude/mods/opensearch/servers.json)",
+      "Edit(~/.claude/mods/opensearch/*.json)",
       "Edit(~/.claude/plugins/store/**)",
       "Edit(~/.curlrc)"
     ]

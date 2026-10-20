@@ -12,11 +12,11 @@ const PANE = { plugin: 'opensearch-console', surface: 'terminal', component: 'Pa
 function world(on: On, servers: unknown[]) {
   const files = new Map<string, string>([[`${BASE}/servers.json`, JSON.stringify({ servers })]])
   const runs: { argv: readonly string[]; stdin?: string }[] = []
-  let clock = 1
+  let tick = 1
   const mtimes = new Map<string, number>()
   mock.env(on, { HOME })
   mock.store(on)
-  mock.clock(on)
+  const clock = mock.clock(on)
   on('fs.exists', ($, e) => ({ value: files.has(e.path) }))
   on('fs.read', ($, e) => {
     if (!files.has(e.path)) throw new Error(`ENOENT ${e.path}`)
@@ -24,7 +24,7 @@ function world(on: On, servers: unknown[]) {
   })
   on('fs.write', ($, e) => {
     files.set(e.path, e.text)
-    mtimes.set(e.path, clock++)
+    mtimes.set(e.path, tick++)
     return { value: undefined }
   })
   on('fs.stat', ($, e) => {
@@ -39,7 +39,12 @@ function world(on: On, servers: unknown[]) {
     return { value: { exitCode: 0, stdout: isCurl ? '{"ok":true}\n__OSCONSOLE__200 0.01' : 'secret-from-command\n', stderr: '', isStdoutTruncated: false, isStderrTruncated: false } } as any
   })
   const curls = () => runs.filter(r => r.argv[0] === 'curl')
-  return { files, runs, curls }
+  // Writes a file as an outside writer (an agent) would: new content, newer mtime.
+  const touch = (path: string, text: string) => {
+    files.set(path, text)
+    mtimes.set(path, 1_000_000 + clock.now())
+  }
+  return { files, runs, curls, clock, touch }
 }
 
 async function openConsole($: any, file = 's1.json') {
@@ -62,11 +67,16 @@ describe('writes', () => {
     expect(w.curls()[0]!.stdin).toContain('data-raw = "{\\"a\\":1}"')
   })
 
-  test('editing the console cancels an open prompt, so a swapped request is never sent', async ($, on) => {
+  test('an outside change to the session file cancels an open prompt, so a swapped request is never sent', async ($, on) => {
     const w = world(on, [{ id: 'local', name: 'Local', host: '127.0.0.1' }])
     const ui = await openConsole($)
     await ui.post({ type: 'run', text: 'PUT idx/_doc/1\n{}', row: 0 }, { in: 'editor' })
-    await ui.post({ type: 'edit', text: 'DELETE prod-logs-*', row: 0 }, { in: 'editor' })
+    expect(await ui.find({ key: 'confirm-once' })).toBeDefined()
+    // While the prompt is open the editor is hidden; an agent rewrites the session file instead.
+    expect(await ui.find({ key: 'editor' })).toBeUndefined()
+    w.touch(`${BASE}/sessions/s1.json`, JSON.stringify({ server: 'local', cursorRow: 0, query: 'DELETE prod-logs-*' }))
+    // The pane re-reads its files on a timer; any read of them (here the agent's own status call) syncs.
+    await $.tool.call({ tool: TOOL, action: 'status' } as any)
     expect(await ui.find({ key: 'confirm-once' })).toBeUndefined()
     expect(w.curls()).toEqual([])
   })
@@ -133,13 +143,19 @@ describe('session unlocks', () => {
 })
 
 describe('long bodies', () => {
-  test('the send buttons appear only once the whole body is shown', async ($, on) => {
+  test('the send buttons appear only on the last body page, after every page', async ($, on) => {
     const w = world(on, [{ id: 'dev', name: 'Dev', host: '10.0.0.2' }])
-    const ui = await openConsole($)
-    const body = JSON.stringify({ query: { bool: { should: Array.from({ length: 300 }, (_, i) => ({ term: { id: `id-${i}` } })) } } })
-    await ui.post({ type: 'run', text: `POST idx/_delete_by_query\n${body}`, row: 0 }, { in: 'editor' })
-    expect(await ui.find({ key: 'confirm-once' })).toBeUndefined()
-    await ui.press({ key: 'show-body' })
+    await $.tool.call({ tool: TOOL, action: 'status', filepath: 's1.json' } as any)
+    const ui: any = await $.ui.mount({ ...PANE, viewport: { columns: 110, rows: 40 } })
+    const lines = Array.from({ length: 30 }, (_, i) => `{"delete":{"_index":"products","_id":"${i}"}}`).join('\n')
+    await ui.post({ type: 'run', text: `POST _bulk\n{"index":{"_index":"a"}}\n{"x":1}\n${lines}`, row: 0 }, { in: 'editor' })
+    let presses = 0
+    while (await ui.find({ key: 'body-next' })) {
+      expect(await ui.find({ key: 'confirm-once' })).toBeUndefined()
+      await ui.press({ key: 'body-next' })
+      presses++
+    }
+    expect(presses).toBeGreaterThan(0)
     expect(await ui.find({ key: 'confirm-once' })).toBeDefined()
     expect(w.curls()).toEqual([])
   })
@@ -150,7 +166,7 @@ describe('long bodies', () => {
     const body = JSON.stringify({ query: { ids: { values: Array.from({ length: 3000 }, (_, i) => `doc-${i}`) } } })
     await ui.post({ type: 'run', text: `POST idx/_delete_by_query\n${body}`, row: 0 }, { in: 'editor' })
     expect(await ui.find({ key: 'confirm-once' })).toBeUndefined()
-    expect(await ui.find({ key: 'show-body' })).toBeUndefined()
+    expect(await ui.find({ key: 'body-next' })).toBeUndefined()
     expect(w.curls()).toEqual([])
   })
 })

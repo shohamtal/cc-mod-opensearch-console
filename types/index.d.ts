@@ -51,7 +51,7 @@ declare module 'claude-code' {
       confirm: OsConfirm | null
       unlocked: OsUnlock[]
       prodSeen: string[]
-      showBody: boolean
+      bodyPage: number
       editorCmd: { id: number; cmd: 'undo' | 'redo' } | null
     }
   }

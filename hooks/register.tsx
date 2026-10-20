@@ -29,6 +29,7 @@ import {
   uniqueServers,
   duplicateKey,
   sentBody,
+  wrapRows,
   type Server,
 } from './lib'
 
@@ -57,7 +58,8 @@ const editorCmd = atom({ plugin: 'opensearch-console', key: 'editorCmd' } as con
 const unlocked = atom({ plugin: 'opensearch-console', key: 'unlocked' } as const, [])
 // Ids and URLs seen tagged production in this session: removing the tag later doesn't count.
 const prodSeen = atom({ plugin: 'opensearch-console', key: 'prodSeen' } as const, [])
-const showBody = atom({ plugin: 'opensearch-console', key: 'showBody' } as const, false)
+// The body page the write prompt shows; the send buttons wait for the last one.
+const bodyPage = atom({ plugin: 'opensearch-console', key: 'bodyPage' } as const, 0)
 
 const HELP = `**Top bar**
 - **▾ Server** — open the list of servers from \`servers.json\` and pick one (● is active; production is red)
@@ -207,7 +209,7 @@ async function rememberProduction($: EngineInterface, list: Server[]) {
   // Kept across sessions too: a production server stays one even if its tag is gone next time.
   const kept = ((await $.store.get('prodSeen')) as string[] | undefined) ?? []
   const next = [...new Set([...kept, ...marks])]
-  if (next.length !== kept.length) await $.store.set('prodSeen', next.slice(-500))
+  if (next.length !== kept.length) await $.store.set('prodSeen', next.slice(-20000))
 }
 
 // A session unlock counts only for the server entry it was given to, unchanged.
@@ -492,7 +494,7 @@ async function run($: EngineInterface) {
   const isWrite = !!writeGuard(req)
   if (isWrite && !(await isUnlockedNow($, target))) {
     await update($, confirm, () => ({ kind: 'write' as const, req: pending }))
-    await update($, showBody, () => false)
+    await update($, bodyPage, () => 0)
     return
   }
   await send($, pending)
@@ -653,7 +655,7 @@ export const register: Register = on => {
       const want = await resolvePath($, input.configfilepath, base)
       const real = (await $.fs.stat(want, { resolve: true }).catch(() => undefined))?.realPath ?? want
       const root = (await $.fs.stat(base, { resolve: true }).catch(() => undefined))?.realPath ?? base
-      if (!real.startsWith(root + '/') || real.startsWith(root + '/sessions/')) return { result: `configfilepath must be inside ${base}/ (not sessions/). Ask the user to open other configs with /opensearch --configfilepath.`, isError: true }
+      if (!real.startsWith(root + '/') || real.toLowerCase().startsWith((root + '/sessions/').toLowerCase())) return { result: `configfilepath must be inside ${base}/ (not sessions/). Ask the user to open other configs with /opensearch --configfilepath.`, isError: true }
     }
     const refused = await attach($, input.filepath, input.configfilepath)
     if (refused) return { result: refused, isError: true }
@@ -749,7 +751,8 @@ export const register: Register = on => {
 
   on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => {
     const { Box, Text, Button, Select, Input, Client, Markdown } = $.ui.resolve(e) as any
-    const rows = e.viewport?.rows ?? 36
+    // The pane's own rows (the terminal's height is larger: transcript, prompt and footer share it).
+    const rows = (e.props as any).scroll?.bodyRows ?? e.viewport?.rows ?? 36
     const text = await read($, query)
     const r = await read($, result)
     const v = (await read($, view)) ?? EMPTY_VIEW
@@ -762,10 +765,16 @@ export const register: Register = on => {
     const isMenu = await read($, menuOpen)
     const targetFull = target ? await findServer($, target.id) : undefined
     const isUnlocked = !!targetFull && (await isUnlockedNow($, targetFull))
-    const bodyOpen = await read($, showBody)
     const ask = await read($, confirm)
-    // The send buttons appear only once the person can see the whole body.
-    const bodySeen = !!ask && ask.kind === 'write' && ask.req.sent.length <= BODY_LIMIT && (bodyOpen || ask.req.sent.length <= 160)
+    const cols = (e.props as any).bodyColumns ?? 100
+    // A write prompt takes the whole pane. Its body is cut into pages that fit the pane's real
+    // rows and columns, and the send buttons show only on the last page, after every page.
+    // Toolbar, info line, the prompt's frame and its other lines take 9 rows (10 with a bulk summary).
+    const pageSize = Math.max(3, rows - 9 - (ask && ask.kind === 'write' && ask.req.summary ? 1 : 0))
+    const bodyLines = ask && ask.kind === 'write' ? wrapRows(ask.req.sent, cols - 4) : []
+    const pages = Math.max(1, Math.ceil(bodyLines.length / pageSize))
+    const page = Math.min((await read($, bodyPage)) ?? 0, pages - 1)
+    const bodySeen = !!ask && ask.kind === 'write' && ask.req.sent.length <= BODY_LIMIT && page === pages - 1
     const cmd = await read($, editorCmd)
     const help = await read($, showHelp)
     const pasted = await read($, paste)
@@ -776,7 +785,7 @@ export const register: Register = on => {
 
     const fixed = 11
     // An open menu or prompt sits under the toolbar; the editor gives up its rows.
-    const extra = isMenu ? Math.max(1, list.length) + 2 : ask ? (ask.kind === 'write' ? 7 + (ask.req.summary ? 1 : 0) + (bodyOpen ? Math.ceil(ask.req.sent.length / 100) : 0) : 6) : 0
+    const extra = isMenu ? Math.max(1, list.length) + 2 : ask?.kind === 'trust' ? 6 : 0
     const editorHeight = Math.max(3, Math.floor((rows - fixed) * 0.4) - extra)
     viewerHeight = Math.max(4, rows - fixed - editorHeight)
     editorBottom = 2 + editorHeight
@@ -893,22 +902,23 @@ export const register: Register = on => {
             <Text bold color="error">{`Writes are locked for ${ask.req.serverName}`}</Text>
             <Text>{`${ask.req.method} ${ask.req.url}/${ask.req.path.replace(/^\/+/, '')}`}</Text>
             {ask.req.summary ? <Text color="warning">{ask.req.summary}</Text> : null}
-            {ask.req.sent ? (
-              ask.req.sent.length > BODY_LIMIT ? (
-                <Text color="error">{`body: ${ask.req.sent.length} characters, too long to review here, so it can't be sent from the console.`}</Text>
-              ) : bodyOpen || ask.req.sent.length <= 160 ? (
-                <Text wrap="wrap">{`body (as sent): ${ask.req.sent}`}</Text>
-              ) : (
-                <Box flexDirection="row" gap={1}>
-                  <Text dimColor wrap="truncate-end">{`body (as sent, ${ask.req.sent.length} characters): ${ask.req.sent.slice(0, 90).replace(/\n/g, ' ⏎ ')}…`}</Text>
-                  <Button key="show-body" label="Show all" onPress={() => void update($, showBody, () => true)} />
-                </Box>
-              )
-            ) : (
+            {!ask.req.sent ? (
               <Text dimColor>no body</Text>
+            ) : ask.req.sent.length > BODY_LIMIT ? (
+              <Text color="error">{`body: ${ask.req.sent.length} characters, too long to review here, so it can't be sent from the console.`}</Text>
+            ) : (
+              <Box flexDirection="column">
+                <Text dimColor>{`body as sent${pages > 1 ? `, page ${page + 1} of ${pages}` : ''}:`}</Text>
+                {bodyLines.slice(page * pageSize, (page + 1) * pageSize).map(l => (
+                  <Text wrap="truncate-end">{l || ' '}</Text>
+                ))}
+              </Box>
             )}
-            <Text dimColor>{bodySeen ? 'This request can change data. Run sends exactly what is shown here.' : 'Read the whole body (Show all) before you can run it.'}</Text>
+            <Text dimColor>{bodySeen ? 'This request can change data. Run sends exactly what is shown here.' : ask.req.sent.length > BODY_LIMIT ? 'Cancel, and send a smaller body.' : 'Read every page of the body before you can run it.'}</Text>
             <Box flexDirection="row" gap={2} height={1}>
+              {!bodySeen && ask.req.sent.length <= BODY_LIMIT ? (
+                <Button key="body-next" label={`Next page (${page + 2} of ${pages})`} variant="primary" onPress={() => void update($, bodyPage, n => Math.min(pages - 1, (n ?? 0) + 1))} />
+              ) : null}
               {bodySeen ? (
                 <Button
                   key="confirm-once"
@@ -966,6 +976,7 @@ export const register: Register = on => {
             </Box>
           </Box>
         ) : null}
+        {ask?.kind === 'write' ? null : (<>
         <Client
           key="editor"
           module="./editor.tsx"
@@ -994,6 +1005,7 @@ export const register: Register = on => {
         ) : (
           <Client key="viewer" module="./viewer.tsx" width="100%" height={viewerHeight + 1} props={viewerProps} />
         )}
+        </>)}
       </Box>
     )
   })
