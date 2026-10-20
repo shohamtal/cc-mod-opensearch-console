@@ -70,6 +70,7 @@ Requirements: Claude Code with function-hook mods (2.1.29x or newer) and `curl` 
   - Paths may use `\` or `/`, and `C:\…` paths are absolute.
   - `passwordEnv` is read with `System32\cmd.exe /d /c set` (never a `printenv` from `PATH`), which allows only plain variable names.
   - `ctrl+v` uses PowerShell's `Get-Clipboard`.
+  - Copying uses `System32\clip.exe`. Under WSL, install `wl-copy` or `xclip` for copying, or the terminal's own clipboard route (OSC 52) is used.
   - A `passwordCommand` runs as given, so use a Windows command there.
 
 <details>

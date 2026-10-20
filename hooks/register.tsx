@@ -675,7 +675,8 @@ async function send($: EngineInterface, pending: OsPending) {
   }
   // lastRun first: a pane that sees the new response then reads the matching status line.
   const { text: _t, id: _i, ...meta } = next
-  await saveSession($, { lastRun: meta }, file)
+  // A failed lastRun save (it toasts) must not lose the response itself.
+  await saveSession($, { lastRun: meta }, file).catch(() => undefined)
   await write($, responsePath, next.text)
   if (next.error) $.ui.toast(`OpenSearch: ${next.error.slice(0, 200)}`)
 }
