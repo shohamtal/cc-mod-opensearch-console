@@ -850,7 +850,7 @@ export const register: Register = on => {
             <Text bold color="error">{`Writes are locked for ${ask.req.serverName}`}</Text>
             <Text>{`${ask.req.method} ${ask.req.url}/${ask.req.path.replace(/^\/+/, '')}`}</Text>
             {ask.req.body ? <Text dimColor wrap="truncate-end">{`body: ${ask.req.body.replace(/\s+/g, ' ').slice(0, 300)}`}</Text> : <Text dimColor>no body</Text>}
-            <Text dimColor>This request can change data. Yes sends exactly what is shown here.</Text>
+            <Text dimColor>This request can change data. Run sends exactly what is shown here.</Text>
             <Box flexDirection="row" gap={2} height={1}>
               <Button
                 key="confirm-once"
