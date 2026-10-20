@@ -18,7 +18,9 @@ export type OsView = {
   match: number
 }
 
-export type OsServer = { name: string; url: string; indices?: string[] }
+export type OsServer = { id: string; name: string; host: string; url: string; tag?: 'production' | 'staging' | 'development' | 'local'; indices?: string[]; allowWrites?: boolean }
+
+export type OsConfirm = { serverId: string; serverName: string; method: string; path: string }
 
 declare module 'claude-code' {
   interface PluginState {
@@ -37,6 +39,9 @@ declare module 'claude-code' {
       indicesLoading: string
       paths: { file: string; config: string } | null
       editorScroll: { id: number; by: number } | null
+      menuOpen: boolean
+      confirm: OsConfirm | null
+      editorCmd: { id: number; cmd: 'undo' | 'redo' } | null
     }
   }
 }

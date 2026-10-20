@@ -2,7 +2,7 @@ import { describe, expect, test } from 'claude-code/testing'
 
 import {
   ancestorsOpen, buildLines, curlConfig, findMatches, foldablePaths, formatAt, highlight,
-  lineText, parseCurlOutput, parseRequests, requestAt, requestBody, writeGuard, parseArgs,
+  lineText, parseCurlOutput, parseRequests, requestAt, requestBody, writeGuard, parseArgs, normalizeServer, baseUrl,
 } from './lib'
 
 const CONSOLE = `GET _cluster/health
@@ -137,4 +137,25 @@ test('Elasticsearch point in time: open on an index, close bare; nothing else', 
   for (const [method, path] of [['POST', '_pit'], ['DELETE', 'idx/_pit'], ['POST', 'idx/_doc/_pit'], ['PUT', 'idx/_pit'], ['POST', '_scripts/_pit']]) {
     expect(writeGuard({ method: method!, path: path! })).toBeDefined()
   }
+})
+
+describe('servers', () => {
+  test('an old url entry becomes host, port and https; id falls back to name', async () => {
+    expect(normalizeServer({ name: 'stg', url: 'https://search.example.com:443/proxy/' })).toEqual({
+      id: 'stg', name: 'stg', host: 'search.example.com', port: 443, https: true, path: '/proxy',
+    })
+  })
+
+  test('the new shape keeps its fields and gets the default port', async () => {
+    const s = normalizeServer({ id: 'eu', name: 'Production EU', host: '10.0.0.5', tag: 'production', passwordEnv: 'OS_PW', allowWrites: true, tag2: 'x' })!
+    expect(s).toEqual({ id: 'eu', name: 'Production EU', host: '10.0.0.5', port: 9200, https: false, passwordEnv: 'OS_PW', tag: 'production', allowWrites: true })
+    expect(baseUrl(s)).toBe('http://10.0.0.5:9200')
+  })
+
+  test('entries without a host or a name are skipped; unknown tags are dropped', async () => {
+    expect(normalizeServer({ name: 'x' })).toBeUndefined()
+    expect(normalizeServer({ host: 'h' })).toBeUndefined()
+    expect(normalizeServer({ name: 'x', host: 'h', tag: 'prod' })!.tag).toBeUndefined()
+    expect(normalizeServer({ name: 'x', host: 'h', passwordCommand: ['security', 1] })!.passwordCommand).toBeUndefined()
+  })
 })

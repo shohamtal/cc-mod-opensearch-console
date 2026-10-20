@@ -337,3 +337,75 @@ export function parseArgs(args: string): { file?: string; config?: string; rest:
   }
   return out
 }
+
+// ---- servers ----
+
+export type ServerTag = 'production' | 'staging' | 'development' | 'local'
+
+// One entry of servers.json. `name` is what the dropdown shows; `id` is what session files keep.
+export type Server = {
+  id: string
+  name: string
+  host: string
+  port?: number
+  https?: boolean
+  insecure?: boolean
+  username?: string
+  password?: string
+  passwordEnv?: string
+  passwordCommand?: string[]
+  tag?: ServerTag
+  path?: string
+  headers?: Record<string, string>
+  indices?: string[]
+  allowWrites?: boolean
+}
+
+const TAGS = new Set(['production', 'staging', 'development', 'local'])
+
+// Reads one config entry into the current shape. An old entry with `url` instead of
+// host / port / https still works; `id` falls back to `name`.
+export function normalizeServer(raw: unknown, defaultPort = 9200): Server | undefined {
+  if (!raw || typeof raw !== 'object') return undefined
+  const r = raw as Record<string, unknown>
+  const str = (v: unknown) => (typeof v === 'string' && v.trim() ? v.trim() : undefined)
+  let host = str(r.host)
+  let port = typeof r.port === 'number' ? r.port : undefined
+  let https = typeof r.https === 'boolean' ? r.https : undefined
+  let path = str(r.path)
+  const url = str(r.url)
+  if (!host && url) {
+    try {
+      const u = new URL(url)
+      host = u.hostname
+      https = u.protocol === 'https:'
+      port = u.port ? Number(u.port) : https ? 443 : 80
+      if (u.pathname && u.pathname !== '/') path = u.pathname.replace(/\/+$/, '')
+    } catch {
+      return undefined
+    }
+  }
+  const id = str(r.id) ?? str(r.name)
+  if (!id || !host) return undefined
+  const s: Server = { id, name: str(r.name) ?? id, host, port: port ?? defaultPort, https: https ?? false }
+  if (r.insecure === true) s.insecure = true
+  if (str(r.username)) s.username = str(r.username)
+  if (typeof r.password === 'string') s.password = r.password
+  if (str(r.passwordEnv)) s.passwordEnv = str(r.passwordEnv)
+  if (Array.isArray(r.passwordCommand) && r.passwordCommand.length && r.passwordCommand.every(a => typeof a === 'string')) s.passwordCommand = r.passwordCommand as string[]
+  if (typeof r.tag === 'string' && TAGS.has(r.tag)) s.tag = r.tag as ServerTag
+  if (path) s.path = path.startsWith('/') ? path : `/${path}`
+  if (r.headers && typeof r.headers === 'object') s.headers = Object.fromEntries(Object.entries(r.headers as Record<string, unknown>).filter(([, v]) => typeof v === 'string')) as Record<string, string>
+  if (Array.isArray(r.indices)) s.indices = r.indices.map(String)
+  if (r.allowWrites === true) s.allowWrites = true
+  return s
+}
+
+export const baseUrl = (s: Pick<Server, 'host' | 'port' | 'https' | 'path'>) =>
+  `${s.https ? 'https' : 'http'}://${s.host}:${s.port ?? (s.https ? 443 : 9200)}${s.path ?? ''}`
+
+// The color a tag gets in the server menu and the status line.
+export const tagColor = (tag?: ServerTag) => (tag === 'production' ? 'error' : tag === 'staging' ? 'warning' : tag === 'development' ? 'success' : undefined)
+
+// Clipboard readers, tried in turn: macOS, Wayland, X11, Windows.
+export const PASTE_COMMANDS = [['pbpaste'], ['wl-paste', '-n'], ['xclip', '-o', '-selection', 'clipboard'], ['powershell.exe', '-NoProfile', '-Command', 'Get-Clipboard']]
