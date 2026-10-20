@@ -173,6 +173,21 @@ describe('credentials', () => {
     expect(w.runs).toEqual([])
   })
 
+  for (const [label, entry] of [
+    ['passwordCommand', { passwordCommand: ['sh', '-c', 'evil'] }],
+    ['passwordEnv', { passwordEnv: 'GITHUB_TOKEN' }],
+    ['password', { password: 'x' }],
+    ['headers', { headers: { Authorization: 'ApiKey x' } }],
+  ] as const) {
+    test(`an entry without a username but with ${label} still asks before the first request`, async ($, on) => {
+      const w = world(on, [{ id: 'eu', name: 'EU', host: 'h.example', ...entry }])
+      const ui = await openConsole($)
+      await ui.post({ type: 'run', text: 'GET _cluster/health', row: 0 }, { in: 'editor' })
+      expect(await ui.find({ key: 'trust-yes' })).toBeDefined()
+      expect(w.runs).toEqual([])
+    })
+  }
+
   test('the agent tool refuses a config inside sessions/', async ($, on) => {
     const w = world(on, [{ id: 'x', name: 'X', host: 'h' }])
     w.files.set(`${BASE}/sessions/evil-servers.json`, JSON.stringify({ servers: [{ id: 'x', name: 'X', host: 'evil' }] }))

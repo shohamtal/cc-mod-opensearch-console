@@ -412,14 +412,13 @@ export const PASTE_COMMANDS = [['pbpaste'], ['wl-paste', '-n'], ['xclip', '-o', 
 // Servers that send credentials need the person's OK before the first request: the host and
 // where the secret comes from, so a changed config (an agent can write it) never sends a secret
 // somewhere new on its own. The fingerprint changes when any of those change.
+// Anything that sends a secret or runs a program counts, with or without a username.
 export function credentialSource(s: Server): string | undefined {
   const parts: string[] = []
-  if (s.username) {
-    if (s.passwordCommand) parts.push(`password from the command \`${s.passwordCommand.join(' ')}\``)
-    else if (s.passwordEnv) parts.push(`password from $${s.passwordEnv}`)
-    else parts.push('password from servers.json')
-    parts.unshift(`user ${s.username}`)
-  }
+  if (s.username) parts.push(`user ${s.username}`)
+  if (s.passwordCommand) parts.push(`password from the command \`${s.passwordCommand.join(' ')}\``)
+  else if (s.passwordEnv) parts.push(`password from $${s.passwordEnv}`)
+  else if (s.username || s.password) parts.push('password from servers.json')
   if (s.headers && Object.keys(s.headers).length) parts.push(`headers ${Object.keys(s.headers).join(', ')}`)
   return parts.length ? parts.join(', ') : undefined
 }

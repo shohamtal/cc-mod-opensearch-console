@@ -175,7 +175,8 @@ async function passwordOf($: EngineInterface, s: Server): Promise<string> {
 }
 
 async function credsFor($: EngineInterface, s: Server): Promise<ServerCreds> {
-  return { name: s.id, url: baseUrl(s), username: s.username, password: await passwordOf($, s), insecure: s.insecure, headers: s.headers }
+  // A password is only resolved (and a passwordCommand only run) when there is a user to send it for.
+  return { name: s.id, url: baseUrl(s), username: s.username, password: s.username ? await passwordOf($, s) : undefined, insecure: s.insecure, headers: s.headers }
 }
 
 async function findServer($: EngineInterface, id: string): Promise<Server | undefined> {
