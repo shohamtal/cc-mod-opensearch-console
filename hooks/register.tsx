@@ -835,7 +835,8 @@ export const register: Register = on => {
             key="server-menu"
             label={`▾ ${target ? target.name : 'Choose server'}`}
             variant="primary"
-            onPress={() => void update($, menuOpen, o => !o)}
+            // No menu while a write prompt is open: it would push the prompt's buttons out of view.
+            onPress={() => void (ask?.kind === 'write' ? $.ui.toast('Finish or cancel the write prompt first.') : update($, menuOpen, o => !o))}
           />
           <Button
             key="lock"
@@ -877,7 +878,7 @@ export const register: Register = on => {
             {target ? `${target.url}${target.tag ? ` · ${target.tag}` : ''}` : '(no server)'}
           </Text>
         </Text>
-        {isMenu ? (
+        {isMenu && ask?.kind !== 'write' ? (
           <Box flexDirection="column" borderStyle="round" borderColor="#4ec9b0" backgroundColor="#1e1e1e" paddingX={1}>
             {list.length === 0 && <Text color="error">no servers in {configFile}</Text>}
             {list.map(sv => (
@@ -974,8 +975,8 @@ export const register: Register = on => {
         ) : null}
         {ask && ask.kind === 'trust' ? (
           <Box flexDirection="column" borderStyle="round" borderColor="#d7a700" backgroundColor="#1e1e1e" paddingX={1}>
-            <Text bold color="warning">{`Send credentials to ${ask.serverName}?`}</Text>
-            <Text>{`${ask.url} gets ${ask.source}.`}</Text>
+            <Text bold color="warning" wrap="truncate-end">{`Send credentials to ${asciiView(ask.serverName)}?`}</Text>
+            <Text wrap="wrap">{asciiView(`${ask.url} gets ${ask.source}.`)}</Text>
             <Text dimColor>Asked once per server, and again whenever its host or credential source changes in the config.</Text>
             <Box flexDirection="row" gap={2} height={1}>
               <Button
