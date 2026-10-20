@@ -1,7 +1,7 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register, Timer } from 'claude-code'
 
-import type { OsPending, OsResult, OsServer, OsView } from '../types'
+import type { OsPending, OsResult, OsServer, OsUnlock, OsView } from '../types'
 import {
   ancestorsOpen,
   buildLines,
@@ -27,6 +27,8 @@ import {
   credentialSource,
   credentialFingerprint,
   uniqueServers,
+  duplicateKey,
+  sentBody,
   type Server,
 } from './lib'
 
@@ -51,6 +53,9 @@ const confirm = atom({ plugin: 'opensearch-console', key: 'confirm' } as const, 
 const editorCmd = atom({ plugin: 'opensearch-console', key: 'editorCmd' } as const, null)
 // Servers whose writes the person unlocked from the pane, for this session only. Never read from disk.
 const unlocked = atom({ plugin: 'opensearch-console', key: 'unlocked' } as const, [])
+// Ids and URLs seen tagged production in this session: removing the tag later doesn't count.
+const prodSeen = atom({ plugin: 'opensearch-console', key: 'prodSeen' } as const, [])
+const showBody = atom({ plugin: 'opensearch-console', key: 'showBody' } as const, false)
 
 const HELP = `**Top bar**
 - **▾ Server** — open the list of servers from \`servers.json\` and pick one (● is active; production is red)
@@ -187,6 +192,23 @@ async function trust($: EngineInterface, fingerprint: string) {
   if (!trusted.includes(fingerprint)) await $.store.set('trusted', [...trusted, fingerprint].slice(-200))
 }
 
+async function isProduction($: EngineInterface, s: Server): Promise<boolean> {
+  const seen = (await read($, prodSeen)) ?? []
+  return s.tag === 'production' || seen.includes(`id:${s.id}`) || seen.includes(`url:${baseUrl(s)}`)
+}
+
+async function rememberProduction($: EngineInterface, list: Server[]) {
+  const marks = list.filter(s => s.tag === 'production').flatMap(s => [`id:${s.id}`, `url:${baseUrl(s)}`])
+  if (marks.length) await update($, prodSeen, seen => [...new Set([...(seen ?? []), ...marks])])
+}
+
+// A session unlock counts only for the server entry it was given to, unchanged.
+async function isUnlockedNow($: EngineInterface, s: Server): Promise<boolean> {
+  if (await isProduction($, s)) return false
+  const fp = credentialFingerprint(s)
+  return ((await read($, unlocked)) ?? []).some(u => u.id === s.id && u.url === baseUrl(s) && u.fingerprint === fp)
+}
+
 async function askTrust($: EngineInterface, s: Server, req: OsPending | null, then: 'run' | 'indices') {
   await update($, confirm, () => ({
     kind: 'trust' as const,
@@ -280,6 +302,7 @@ async function sync($: EngineInterface) {
   if (!sessionFile) return
   if (await changed($, configFile)) {
     const list = await readServers($)
+    await rememberProduction($, list)
     await update($, servers, () =>
       list.map(s => ({
         id: s.id,
@@ -391,7 +414,8 @@ function scheduleSave($: EngineInterface) {
 // ---- running a request ----
 
 async function catNames($: EngineInterface, creds: ServerCreds, path: string, field: string): Promise<string[]> {
-  const out = await $.process.run(['curl', '-K', '-'], {
+  // -q first: curl must not read ~/.curlrc (a proxy or trace file there would see credentials).
+  const out = await $.process.run(['curl', '-q', '-K', '-'], {
     stdin: curlConfig(creds, { start: 0, end: 0, method: 'GET', path, body: '' }),
     timeoutMs: 30_000,
   })
@@ -441,19 +465,26 @@ async function run($: EngineInterface) {
   const name = await read($, server)
   const target = await findServer($, name)
   if (!target) return $.ui.toast(`No server "${name}" in ${configFile}`)
+  const shown = sentBody(req)
+  const dup = req.body ? duplicateKey(req.body) : undefined
+  if (dup) return $.ui.toast(`Not sent: the body repeats the key "${dup}" (only the last one would count). Remove the duplicate.`)
   const pending: OsPending = {
     serverId: target.id,
     serverName: target.name,
     url: baseUrl(target),
+    fingerprint: credentialFingerprint(target),
     method: req.method,
     path: req.path,
     body: req.body,
-    production: target.tag === 'production',
+    sent: shown.body,
+    ...(shown.summary ? { summary: shown.summary } : {}),
+    production: await isProduction($, target),
   }
-  // Writes ask first, unless the person unlocked this server from the pane in this session.
+  // Writes ask first, unless the person unlocked this exact server entry from the pane in this session.
   const isWrite = !!writeGuard(req)
-  if (isWrite && !((await read($, unlocked)) ?? []).includes(target.id)) {
+  if (isWrite && !(await isUnlockedNow($, target))) {
     await update($, confirm, () => ({ kind: 'write' as const, req: pending }))
+    await update($, showBody, () => false)
     return
   }
   await send($, pending)
@@ -463,7 +494,7 @@ async function run($: EngineInterface) {
 // credentials must be approved. Nothing here reads the editor again.
 async function send($: EngineInterface, pending: OsPending) {
   const target = await findServer($, pending.serverId)
-  if (!target || baseUrl(target) !== pending.url) {
+  if (!target || baseUrl(target) !== pending.url || credentialFingerprint(target) !== pending.fingerprint) {
     return $.ui.toast(`Not sent: server "${pending.serverName}" changed in ${configFile}. Run it again.`)
   }
   if (!(await isTrusted($, target))) return askTrust($, target, pending, 'run')
@@ -473,7 +504,7 @@ async function send($: EngineInterface, pending: OsPending) {
   let next: OsResult
   try {
     const creds = await credsFor($, target)
-    const out = await $.process.run(['curl', '-K', '-'], { stdin: curlConfig(creds, req), timeoutMs: 130_000 })
+    const out = await $.process.run(['curl', '-q', '-K', '-'], { stdin: curlConfig(creds, req), timeoutMs: 130_000 })
     const parsed = parseCurlOutput(out.stdout)
     next = {
       id: Date.now(),
@@ -721,7 +752,9 @@ export const register: Register = on => {
     const req = requestAt(text, row)
     const target = list.find(s => s.id === current)
     const isMenu = await read($, menuOpen)
-    const isUnlocked = !!target && ((await read($, unlocked)) ?? []).includes(target.id)
+    const targetFull = target ? await findServer($, target.id) : undefined
+    const isUnlocked = !!targetFull && (await isUnlockedNow($, targetFull))
+    const bodyOpen = await read($, showBody)
     const ask = await read($, confirm)
     const cmd = await read($, editorCmd)
     const help = await read($, showHelp)
@@ -733,7 +766,7 @@ export const register: Register = on => {
 
     const fixed = 11
     // An open menu or prompt sits under the toolbar; the editor gives up its rows.
-    const extra = isMenu ? Math.max(1, list.length) + 2 : ask ? (ask.kind === 'write' ? 7 : 6) : 0
+    const extra = isMenu ? Math.max(1, list.length) + 2 : ask ? (ask.kind === 'write' ? 7 + (ask.req.summary ? 1 : 0) + (bodyOpen ? Math.min(12, Math.ceil(ask.req.sent.length / 100)) : 0) : 6) : 0
     const editorHeight = Math.max(3, Math.floor((rows - fixed) * 0.4) - extra)
     viewerHeight = Math.max(4, rows - fixed - editorHeight)
     editorBottom = 2 + editorHeight
@@ -787,7 +820,7 @@ export const register: Register = on => {
               void (async () => {
                 if (!target) return
                 if (isUnlocked) {
-                  await update($, unlocked, l => (l ?? []).filter(id => id !== target.id))
+                  await update($, unlocked, l => (l ?? []).filter(u => u.id !== target.id))
                   $.ui.toast(`${target.name}: writes locked`)
                 } else $.ui.toast('Writes unlock from the prompt that a write opens, one request or one session at a time.')
               })().catch(() => undefined)
@@ -849,7 +882,19 @@ export const register: Register = on => {
           <Box flexDirection="column" borderStyle="round" borderColor="#f14c4c" backgroundColor="#1e1e1e" paddingX={1}>
             <Text bold color="error">{`Writes are locked for ${ask.req.serverName}`}</Text>
             <Text>{`${ask.req.method} ${ask.req.url}/${ask.req.path.replace(/^\/+/, '')}`}</Text>
-            {ask.req.body ? <Text dimColor wrap="truncate-end">{`body: ${ask.req.body.replace(/\s+/g, ' ').slice(0, 300)}`}</Text> : <Text dimColor>no body</Text>}
+            {ask.req.summary ? <Text color="warning">{ask.req.summary}</Text> : null}
+            {ask.req.sent ? (
+              bodyOpen || ask.req.sent.length <= 160 ? (
+                <Text wrap="wrap">{`body (as sent): ${ask.req.sent.slice(0, 4000)}${ask.req.sent.length > 4000 ? ` … and ${ask.req.sent.length - 4000} more characters` : ''}`}</Text>
+              ) : (
+                <Box flexDirection="row" gap={1}>
+                  <Text dimColor wrap="truncate-end">{`body (as sent, ${ask.req.sent.length} characters): ${ask.req.sent.slice(0, 90).replace(/\n/g, ' ⏎ ')}…`}</Text>
+                  <Button key="show-body" label="Show all" onPress={() => void update($, showBody, () => true)} />
+                </Box>
+              )
+            ) : (
+              <Text dimColor>no body</Text>
+            )}
             <Text dimColor>This request can change data. Run sends exactly what is shown here.</Text>
             <Box flexDirection="row" gap={2} height={1}>
               <Button
@@ -871,7 +916,7 @@ export const register: Register = on => {
                   onPress={() =>
                     void (async () => {
                       const req = ask.req
-                      await update($, unlocked, l => [...new Set([...(l ?? []), req.serverId])])
+                      await update($, unlocked, l => [...(l ?? []).filter(u => u.id !== req.serverId), { id: req.serverId, url: req.url, fingerprint: req.fingerprint } as OsUnlock])
                       await update($, confirm, () => null)
                       $.ui.toast(`${req.serverName}: writes unlocked until this session ends (🔓 locks again)`)
                       await send($, req)

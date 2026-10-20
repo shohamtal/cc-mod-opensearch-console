@@ -21,7 +21,10 @@ export type OsView = {
 export type OsServer = { id: string; name: string; host: string; url: string; tag?: 'production' | 'staging' | 'development' | 'local'; indices?: string[] }
 
 // The exact request a prompt shows; Yes sends this, never what the editor holds by then.
-export type OsPending = { serverId: string; serverName: string; url: string; method: string; path: string; body: string; production: boolean }
+export type OsPending = { serverId: string; serverName: string; url: string; fingerprint: string; method: string; path: string; body: string; sent: string; summary?: string; production: boolean }
+
+// A session unlock holds for one server entry exactly as it was: same id, URL and credentials.
+export type OsUnlock = { id: string; url: string; fingerprint: string }
 
 export type OsConfirm =
   | { kind: 'write'; req: OsPending }
@@ -46,7 +49,9 @@ declare module 'claude-code' {
       editorScroll: { id: number; by: number } | null
       menuOpen: boolean
       confirm: OsConfirm | null
-      unlocked: string[]
+      unlocked: OsUnlock[]
+      prodSeen: string[]
+      showBody: boolean
       editorCmd: { id: number; cmd: 'undo' | 'redo' } | null
     }
   }

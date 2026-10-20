@@ -56,6 +56,7 @@ describe('writes', () => {
     expect(w.curls()).toEqual([])
     await ui.press({ key: 'confirm-once' })
     expect(w.curls().length).toBe(1)
+    expect(w.curls()[0]!.argv.slice(0, 3)).toEqual(['curl', '-q', '-K'])
     expect(w.curls()[0]!.stdin).toContain('url = "http://127.0.0.1:9200/idx/_doc/1"')
     expect(w.curls()[0]!.stdin).toContain('request = "PUT"')
     expect(w.curls()[0]!.stdin).toContain('data-raw = "{\\"a\\":1}"')
@@ -93,6 +94,41 @@ describe('writes', () => {
     // Picking the server also loads its index names (GET _cat/…); the writes are what matters here.
     const sent = w.curls().map(c => /url = "([^"]+)"/.exec(c.stdin!)![1]).filter(u => !u.includes('/_cat/'))
     expect(sent).toEqual(['http://10.0.0.2:9200/idx', 'http://10.0.0.2:9200/idx2'])
+  })
+})
+
+describe('session unlocks', () => {
+  test('an unlock does not follow a server whose entry changed (host or credentials)', async ($, on) => {
+    const w = world(on, [{ id: 'stg', name: 'Staging', host: '10.0.0.2' }])
+    const ui = await openConsole($)
+    await ui.post({ type: 'run', text: 'DELETE idx', row: 0 }, { in: 'editor' })
+    await ui.press({ key: 'confirm-session' })
+    expect(w.curls().length).toBe(1)
+    // The agent repoints the unlocked entry at another cluster.
+    w.files.set(`${BASE}/servers.json`, JSON.stringify({ servers: [{ id: 'stg', name: 'Staging', host: '10.9.9.9' }] }))
+    await ui.post({ type: 'run', text: 'DELETE idx', row: 0 }, { in: 'editor' })
+    expect(await ui.find({ key: 'confirm-once' })).toBeDefined()
+    expect(w.curls().length).toBe(1)
+  })
+
+  test('a server seen as production stays production after its tag is removed', async ($, on) => {
+    const w = world(on, [{ id: 'prd', name: 'Prod', host: '10.0.0.1', tag: 'production' }])
+    const ui = await openConsole($)
+    await ui.post({ type: 'run', text: 'DELETE idx', row: 0 }, { in: 'editor' })
+    expect(await ui.find({ key: 'confirm-session' })).toBeUndefined()
+    await ui.press({ key: 'confirm-no' })
+    w.files.set(`${BASE}/servers.json`, JSON.stringify({ servers: [{ id: 'prd', name: 'Prod', host: '10.0.0.1' }] }))
+    await ui.post({ type: 'run', text: 'DELETE idx', row: 0 }, { in: 'editor' })
+    expect(await ui.find({ key: 'confirm-session' })).toBeUndefined()
+    expect(w.curls()).toEqual([])
+  })
+
+  test('a body with a repeated key is not sent and opens no prompt', async ($, on) => {
+    const w = world(on, [{ id: 'dev', name: 'Dev', host: '10.0.0.2' }])
+    const ui = await openConsole($)
+    await ui.post({ type: 'run', text: 'POST idx/_search\n{"query":{"term":{"a":1}},"query":{"match_all":{}}}', row: 0 }, { in: 'editor' })
+    expect(await ui.find({ key: 'confirm-once' })).toBeUndefined()
+    expect(w.curls()).toEqual([])
   })
 })
 

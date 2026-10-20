@@ -101,7 +101,7 @@ On first use the mod creates `~/.claude/mods/opensearch/servers.json` with one `
 
 Older configs with a single `url` field still work.
 
-- Credentials go to curl on **stdin**, never on the command line, so they don't show up in `ps`.
+- Credentials go to curl on **stdin**, never on the command line, so they don't show up in `ps`. curl runs with `-q`, so it never reads `~/.curlrc`.
 - Keep this file private (`chmod 600`). It never leaves your machine.
 
 ## Use it with Claude
@@ -137,10 +137,18 @@ The console sends only requests that read:
 - `POST` to `_search`, `_msearch`, `_count`, `_mget`, `_explain`, `_validate`, `_field_caps`, `_analyze`, `_termvectors`, `_mtermvectors`, `_rank_eval`, search templates, scroll and point-in-time (OpenSearch `_search/point_in_time`, Elasticsearch `_pit`)
 - `DELETE` only to clear a scroll or point-in-time
 
-Anything else (`PUT`, `PATCH`, `_bulk`, `_doc`, `_update`, `_delete_by_query`, `_reindex`, `_aliases`, `_close`, …) opens a prompt that shows the **exact request** (method, full URL, body):
+Anything else (`PUT`, `PATCH`, `_bulk`, `_doc`, `_update`, `_delete_by_query`, `_reindex`, `_aliases`, `_close`, …) opens a prompt that shows the **exact request** as it will be sent:
+
+- **Method and full URL.**
+- **Body, byte for byte**, with **Show all** for long bodies.
+- **A count of `_bulk` actions** (for example `1 index, 2 delete`).
+
+A body that repeats a JSON key is refused, since only the last copy would count.
+
+The prompt then offers:
 
 - **Run this request once:** sends exactly what the prompt shows, even if the editor changed meanwhile.
-- **Unlock for this session:** later writes to this server go out without asking until Claude Code exits. This option doesn't exist for servers tagged `production`. **🔓** locks the server again.
+- **Unlock for this session:** later writes to this server go out without asking until Claude Code exits. The unlock is tied to the server entry as it was: if its host or credentials change, it's gone. It is never offered for a server tagged `production`, nor for one that was tagged production earlier in the session. **🔓** locks the server again.
 - **Cancel**
 
 Unlocks live in memory only. No file the console reads can unlock writes, so an agent editing `servers.json` can't either.
@@ -154,6 +162,25 @@ The guard lives in [`hooks/lib.ts`](hooks/lib.ts) (`writeGuard`) and is covered 
 - whitespace
 
 Request bodies go as `data-raw`, so a body starting with `@` is never read from a local file. Use a read-only cluster user where you can.
+
+
+### Recommended: stop agents from editing the console's config
+
+The console treats its config and its own store as yours. An agent with file access could edit them, and the prompts above limit what that can do. For a firm boundary, add a deny rule to `~/.claude/settings.json`; Claude Code then refuses any edit to these paths:
+
+```json
+{
+  "permissions": {
+    "deny": [
+      "Edit(~/.claude/mods/opensearch/servers.json)",
+      "Edit(~/.claude/plugins/store/**)",
+      "Edit(~/.curlrc)"
+    ]
+  }
+}
+```
+
+`Edit` rules cover every built-in tool that edits files. Agents still write their session files under `~/.claude/mods/opensearch/sessions/`.
 
 ## Keys
 

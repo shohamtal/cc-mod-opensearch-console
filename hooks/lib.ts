@@ -442,3 +442,104 @@ export function uniqueServers(list: Server[]): { servers: Server[]; duplicates: 
   }
   return { servers, duplicates }
 }
+
+// Keys that repeat inside one JSON object: OpenSearch keeps the last one, so a prompt could
+// show one value while another is sent. Answers the first repeated key's path, or undefined.
+// Reads every top-level value (one for a body, several for _bulk / _msearch lines).
+export function duplicateKey(text: string): string | undefined {
+  let i = 0
+  const ws = () => {
+    while (i < text.length && /\s/.test(text[i]!)) i++
+  }
+  const str = (): string => {
+    let out = ''
+    i++
+    while (i < text.length && text[i] !== '"') {
+      if (text[i] === '\\') i++
+      out += text[i] ?? ''
+      i++
+    }
+    i++
+    return out
+  }
+  // Returns a repeated key path found inside the value at i, or undefined; moves i past it.
+  const value = (path: string): string | undefined => {
+    ws()
+    const c = text[i]
+    if (c === '{') {
+      i++
+      const keys = new Set<string>()
+      for (;;) {
+        ws()
+        if (text[i] === '}') {
+          i++
+          return undefined
+        }
+        if (text[i] !== '"') return undefined
+        const k = str()
+        if (keys.has(k)) return path ? `${path}.${k}` : k
+        keys.add(k)
+        ws()
+        if (text[i] === ':') i++
+        const inner = value(path ? `${path}.${k}` : k)
+        if (inner) return inner
+        ws()
+        if (text[i] === ',') i++
+        else if (text[i] === '}') {
+          i++
+          return undefined
+        } else return undefined
+      }
+    }
+    if (c === '[') {
+      i++
+      for (let n = 0; ; n++) {
+        ws()
+        if (text[i] === ']') {
+          i++
+          return undefined
+        }
+        const inner = value(`${path}[${n}]`)
+        if (inner) return inner
+        ws()
+        if (text[i] === ',') i++
+        else if (text[i] === ']') {
+          i++
+          return undefined
+        } else return undefined
+      }
+    }
+    if (c === '"') {
+      str()
+      return undefined
+    }
+    while (i < text.length && !/[\s,}\]]/.test(text[i]!)) i++
+    return undefined
+  }
+  while (i < text.length) {
+    const start = i
+    const found = value('')
+    if (found) return found
+    ws()
+    if (i === start) i++
+  }
+  return undefined
+}
+
+// The body exactly as curl will send it, and a one-line summary of _bulk / _msearch actions.
+export function sentBody(r: Pick<Request, 'path' | 'body'>): { body: string; summary?: string } {
+  const b = requestBody({ start: 0, end: 0, method: 'POST', path: r.path, body: r.body }).body ?? ''
+  if (!/(^|\/)_(bulk|msearch)/.test(r.path.split('?')[0]!)) return { body: b }
+  const counts: Record<string, number> = {}
+  for (const line of b.split('\n')) {
+    try {
+      const v = JSON.parse(line)
+      const k = v && typeof v === 'object' ? Object.keys(v)[0] : undefined
+      if (k && ['index', 'create', 'update', 'delete'].includes(k)) counts[k] = (counts[k] ?? 0) + 1
+    } catch {
+      /* not an action line */
+    }
+  }
+  const summary = Object.entries(counts).map(([k, n]) => `${n} ${k}`).join(', ')
+  return { body: b, summary: summary ? `bulk actions: ${summary}` : undefined }
+}

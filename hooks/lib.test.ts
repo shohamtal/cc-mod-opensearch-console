@@ -2,7 +2,7 @@ import { describe, expect, test } from 'claude-code/testing'
 
 import {
   ancestorsOpen, buildLines, curlConfig, findMatches, foldablePaths, formatAt, highlight,
-  lineText, parseCurlOutput, parseRequests, requestAt, requestBody, writeGuard, parseArgs, normalizeServer, baseUrl,
+  lineText, parseCurlOutput, parseRequests, requestAt, requestBody, writeGuard, parseArgs, normalizeServer, baseUrl, duplicateKey, sentBody,
 } from './lib'
 
 const CONSOLE = `GET _cluster/health
@@ -158,5 +158,20 @@ describe('servers', () => {
     expect(normalizeServer({ host: 'h' })).toBeUndefined()
     expect(normalizeServer({ name: 'x', host: 'h', tag: 'prod' })!.tag).toBeUndefined()
     expect(normalizeServer({ name: 'x', host: 'h', passwordCommand: ['security', 1] })!.passwordCommand).toBeUndefined()
+  })
+})
+
+describe('the write prompt shows what is sent', () => {
+  test('repeated JSON keys are found, at any depth and in bulk lines', async () => {
+    expect(duplicateKey('{"query":{"term":{"a":1}},"query":{"match_all":{}}}')).toBe('query')
+    expect(duplicateKey('{"a":{"b":1,"c":[{"d":1,"d":2}]}}')).toBe('a.c[0].d')
+    expect(duplicateKey('{"index":{}}\n{"x":1,"x":2}')).toBe('x')
+    expect(duplicateKey('{"a":"{\\"a\\":1}","b":{"a":1}}')).toBeUndefined()
+    expect(duplicateKey('{"a":1,"b":[1,2,{"a":2}]}')).toBeUndefined()
+  })
+  test('bulk bodies are summarized by action', async () => {
+    const r = sentBody({ path: '_bulk', body: '{"index":{"_index":"a"}}\n{"x":1}\n{"delete":{"_index":"a","_id":"1"}}\n{"delete":{"_index":"a","_id":"2"}}' })
+    expect(r.summary).toBe('bulk actions: 1 index, 2 delete')
+    expect(r.body.split('\n').length).toBe(5)
   })
 })
