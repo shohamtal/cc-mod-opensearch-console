@@ -9,6 +9,9 @@ Fixes from an external review, all reproduced by tests:
 - **Viewer clicks and the wheel** land on the line drawn after the viewer grew (server menu or prompt open). The wheel over the editor's bottom rows scrolls the editor while a menu is open.
 - **Status line:** `lastRun` is written before the response file, so another pane on the same file never pairs a new body with the old status, and a new run with the same body still updates the status.
 - **A press on a prompt** that an outside change already cancelled does nothing.
+- **Copy reaches the clipboard:** copies go to `pbcopy` / `wl-copy` / `xclip` / `clip.exe` first, then the terminal's OSC 52 (off by default in iTerm2, missing in Terminal.app, where copying looked like it worked but left the clipboard empty).
+- **ctrl+x copies before it cuts:** the copy rode on a separate post that the cut's edit replaced in the same frame, so the cut text was lost.
+- **A console switch saves the old console's last edits** (typed within 250 ms of the switch) to the old file instead of dropping them.
 
 ## 0.2.1
 

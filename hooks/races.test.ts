@@ -47,7 +47,6 @@ describe('session file races', () => {
     const ui: any = await $.ui.mount(PANE)
     await ui.post({ type: 'run', text: 'GET _cluster/health', row: 0 }, { in: 'editor' })
     await $.tool.call({ tool: TOOL, action: 'status' } as any) // a sync
-    console.log('R1 file query =', sess(w).query)
     expect(sess(w).query).toBe('GET agent-query')
   })
 
@@ -59,7 +58,6 @@ describe('session file races', () => {
     await ui.post({ type: 'cursor', text: 'GET _cluster/health', row: 0 }, { in: 'editor' })
     await w.clock.advance(300)
     await $.tool.call({ tool: TOOL, action: 'status' } as any)
-    console.log('R1b file query =', sess(w).query)
     expect(sess(w).query).toBe('GET agent-query')
   })
 
@@ -72,8 +70,6 @@ describe('session file races', () => {
     await $.tool.call({ tool: TOOL, action: 'status', filepath: 'other.json' } as any)
     await w.clock.advance(1100)
     await p
-    console.log('R2 other.response =', w.files.get(`${BASE}/sessions/other.response.json`), 's1.response =', w.files.get(`${BASE}/sessions/s1.response.json`))
-    console.log('R2 other lastRun =', JSON.stringify(sess(w, `${BASE}/sessions/other.json`).lastRun))
     expect(w.files.has(`${BASE}/sessions/other.response.json`)).toBe(false)
   })
 
@@ -88,7 +84,6 @@ describe('session file races', () => {
     await $.tool.call({ tool: TOOL, action: 'status' } as any)
     await ui.post({ type: 'run', text: 'GET _cat/indices', row: 0 }, { in: 'editor' })
     const url = /url = "([^"]+)"/.exec(w.curls[w.curls.length - 1]!)?.[1]
-    console.log('R3 sent to', url, 'file server =', sess(w).server)
     expect(url).toContain('10.0.0.3')
   })
 
@@ -99,7 +94,6 @@ describe('session file races', () => {
     const p = ui.post({ type: 'run', text: 'GET x', row: 0 }, { in: 'editor' })
     await w.clock.advance(400)
     await p
-    console.log('R4 lastRun =', JSON.stringify(sess(w).lastRun))
     expect(sess(w).lastRun?.path).toBe('x')
   })
 })

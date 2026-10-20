@@ -292,3 +292,15 @@ describe('Windows password variables', () => {
     expect(w.curls()[0]!.stdin).not.toContain('old')
   })
 })
+
+describe('clipboard', () => {
+  test('a copy, and a cut riding on its edit post, go to the system clipboard with the text on stdin', async ($, on) => {
+    const w = world(on, [{ id: 'local', name: 'Local', host: '127.0.0.1' }])
+    const ui = await openConsole($)
+    await ui.post({ type: 'copy', copy: 'GET a', text: 'GET a', row: 0 }, { in: 'editor' })
+    await ui.post({ type: 'edit', copy: 'GET b', text: '', row: 0 }, { in: 'editor' })
+    expect(w.runs.map(r => r.argv)).toEqual([['pbcopy'], ['pbcopy']])
+    expect(w.runs.map(r => r.stdin)).toEqual(['GET a', 'GET b'])
+    expect(w.curls()).toEqual([])
+  })
+})

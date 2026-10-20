@@ -434,6 +434,7 @@ export function fromCmdSet(out: string, name: string): string | undefined {
 
 export const ENV_NAME = /^[A-Za-z_][A-Za-z0-9_]*$/
 
+export const COPY_COMMANDS = [['pbcopy'], ['wl-copy'], ['xclip', '-i', '-selection', 'clipboard'], ['clip.exe']]
 export const PASTE_COMMANDS = [['pbpaste'], ['wl-paste', '-n'], ['xclip', '-o', '-selection', 'clipboard'], ['powershell.exe', '-NoProfile', '-Command', 'Get-Clipboard']]
 
 // Servers that send credentials need the person's OK before the first request: the host and

@@ -24,6 +24,7 @@ import {
   baseUrl,
   tagColor,
   PASTE_COMMANDS,
+  COPY_COMMANDS,
   credentialSource,
   credentialFingerprint,
   uniqueServers,
@@ -461,14 +462,17 @@ async function attach($: EngineInterface, file?: string, config?: string): Promi
     await $.fs.write(nextFile, JSON.stringify({ server: first, cursorRow: 0, query: legacy ?? DEFAULT_CONSOLE }, null, 2) + '\n')
   }
   if (nextFile !== sessionFile || nextConfig !== configFile) {
+    // A save still pending for the old console lands there now, never in the new one.
+    if (saveTimer) {
+      saveTimer.cancel()
+      saveTimer = undefined
+      await saveSession($).catch(() => undefined)
+    }
     sessionFile = nextFile
     configFile = nextConfig
     for (const k of Object.keys(seen)) delete seen[k]
     for (const k of Object.keys(seenText)) delete seenText[k]
     wantedServer = ''
-    // A save scheduled for the old console must not land in the new one.
-    saveTimer?.cancel()
-    saveTimer = undefined
     await update($, paths, () => ({ file: nextFile, config: nextConfig }))
     await update($, result, () => null)
     await update($, view, () => EMPTY_VIEW)
@@ -479,6 +483,16 @@ async function attach($: EngineInterface, file?: string, config?: string): Promi
 
 // Closes the prompt only if it is still the one this drawing showed: a press on a prompt that an
 // outside change already cancelled, or replaced, does nothing.
+// The system clipboard first (pbcopy, wl-copy, xclip, clip.exe): the terminal's own route (OSC 52)
+// is off by default in iTerm2 and missing in Terminal.app, where it reports success and copies nothing.
+async function copyText($: EngineInterface, text: string): Promise<boolean> {
+  for (const argv of COPY_COMMANDS) {
+    const out = await $.process.run(argv, { stdin: text, timeoutMs: 5_000 }).catch(() => undefined)
+    if (out && out.exitCode === 0) return true
+  }
+  return (await $.ui.copy({ text })).isCopied
+}
+
 async function takePrompt($: EngineInterface, same: (c: OsConfirm | null) => boolean): Promise<boolean> {
   let ok = false
   await update($, confirm, c => {
@@ -820,9 +834,10 @@ export const register: Register = on => {
       if (data.type !== 'run' && data.type !== 'copy' && (await read($, confirm))) await update($, confirm, () => null)
       if (typeof data.text === 'string') await update($, query, () => data.text)
       if (typeof data.row === 'number') await update($, cursorRow, () => data.row)
+      // A cut carries its text on the edit post; a copy has its own.
+      if (typeof data.copy === 'string') $.ui.toast((await copyText($, data.copy)) ? 'Copied' : 'Copy failed')
       if (data.type === 'copy') {
-        const copied = await $.ui.copy({ text: String(data.copy ?? '') })
-        $.ui.toast(copied.isCopied ? 'Copied' : `Copy failed: ${'reason' in copied ? copied.reason : ''}`)
+        // nothing more: the text and cursor were taken above
       } else if (data.type === 'paste') {
         for (const argv of PASTE_COMMANDS) {
           const out = await $.process.run(argv).catch(() => undefined)
