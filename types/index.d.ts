@@ -18,9 +18,14 @@ export type OsView = {
   match: number
 }
 
-export type OsServer = { id: string; name: string; host: string; url: string; tag?: 'production' | 'staging' | 'development' | 'local'; indices?: string[]; allowWrites?: boolean }
+export type OsServer = { id: string; name: string; host: string; url: string; tag?: 'production' | 'staging' | 'development' | 'local'; indices?: string[] }
 
-export type OsConfirm = { serverId: string; serverName: string; method: string; path: string }
+// The exact request a prompt shows; Yes sends this, never what the editor holds by then.
+export type OsPending = { serverId: string; serverName: string; url: string; method: string; path: string; body: string; production: boolean }
+
+export type OsConfirm =
+  | { kind: 'write'; req: OsPending }
+  | { kind: 'trust'; req: OsPending | null; serverId: string; serverName: string; url: string; source: string; fingerprint: string; then: 'run' | 'indices' }
 
 declare module 'claude-code' {
   interface PluginState {
@@ -41,6 +46,7 @@ declare module 'claude-code' {
       editorScroll: { id: number; by: number } | null
       menuOpen: boolean
       confirm: OsConfirm | null
+      unlocked: string[]
       editorCmd: { id: number; cmd: 'undo' | 'redo' } | null
     }
   }

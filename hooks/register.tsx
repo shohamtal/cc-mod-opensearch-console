@@ -1,7 +1,7 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, Register, Timer } from 'claude-code'
 
-import type { OsResult, OsServer, OsView } from '../types'
+import type { OsPending, OsResult, OsServer, OsView } from '../types'
 import {
   ancestorsOpen,
   buildLines,
@@ -24,6 +24,9 @@ import {
   baseUrl,
   tagColor,
   PASTE_COMMANDS,
+  credentialSource,
+  credentialFingerprint,
+  uniqueServers,
   type Server,
 } from './lib'
 
@@ -46,10 +49,12 @@ const view = atom({ plugin: 'opensearch-console', key: 'view' } as const, EMPTY_
 const menuOpen = atom({ plugin: 'opensearch-console', key: 'menuOpen' } as const, false)
 const confirm = atom({ plugin: 'opensearch-console', key: 'confirm' } as const, null)
 const editorCmd = atom({ plugin: 'opensearch-console', key: 'editorCmd' } as const, null)
+// Servers whose writes the person unlocked from the pane, for this session only. Never read from disk.
+const unlocked = atom({ plugin: 'opensearch-console', key: 'unlocked' } as const, [])
 
 const HELP = `**Top bar**
 - **▾ Server** — open the list of servers from \`servers.json\` and pick one (● is active; production is red)
-- **🔒 / 🔓** — writes are locked per server (\`allowWrites\`); a write on a locked server asks first · **↶ ↷** undo / redo
+- **🔒 / 🔓** — writes are locked; a write asks first (run once, or unlock the server for this session) · **↶ ↷** undo / redo
 - **Format** — pretty-print the body under the cursor · **↻ Indices** — reload the server's index/alias names · **Help** — this screen
 
 **Editor** (click it to type)
@@ -68,7 +73,7 @@ const HELP = `**Top bar**
 - \`1\`–\`9\` fold below that depth · \`y\` copy the response
 - \`/\` or \`ctrl+f\` — jump to **Find** · Enter in Find / \`n\` next match · \`N\` previous
 
-**Writes are locked by default** — on a locked server only GET/HEAD and POST to search-type endpoints (_search, _count, _msearch, _mget, _explain, _validate, scroll, PIT…) are sent. Anything else asks: “Writes are locked for this server. Unlock?” Yes sets \`allowWrites\` in \`servers.json\`; 🔓 locks it again.
+**Writes are locked** — only GET/HEAD and POST to search-type endpoints (_search, _count, _msearch, _mget, _explain, _validate, scroll, PIT…) are sent. A write opens a prompt that shows the exact request: **Run this request once**, **Unlock for this session** (not on production servers) or **Cancel**. Unlocks live in memory only; 🔓 locks again. A server that sends credentials asks once before its first request (and again if its host or credential source changes).
 
 **Files** — one JSON session file per console (default \`~/.claude/mods/opensearch/sessions/default.json\`: server, cursorRow, query, lastRun) + \`<name>.response.json\`; servers in \`servers.json\`. Edits show here live.
 
@@ -82,13 +87,13 @@ Session file (default ~/.claude/mods/opensearch/sessions/default.json): {"server
 - query uses Dev Tools syntax: a "METHOD path" line (GET _cat/indices?v, POST my-index/_search), then an optional JSON body; several requests separated by blank lines.
 - To inject a query, write the session file (keep the other keys); the pane updates within a second. Set cursorRow to the request's METHOD line so Run sends it. Read the file to see the user's edits.
 Response file: the session file with .response.json in place of .json, the last response body (pretty JSON). Read it after the user runs.
-Config file (default ~/.claude/mods/opensearch/servers.json): {"servers": [{"id","name","host","port","https","insecure","username","password" | "passwordEnv" | "passwordCommand","tag","allowWrites","headers"?,"indices"?}]}. The session file's "server" is a server id. Never print passwords, and never change allowWrites yourself: unlocking writes is the user's decision.
-Writes: on a server without allowWrites only reads are sent (GET/HEAD and POST to _search/_count/_msearch/_mget/_explain/_validate/_field_caps/_analyze/_termvectors/templates/scroll/PIT); a write asks the user to unlock first.
+Config file (default ~/.claude/mods/opensearch/servers.json): {"servers": [{"id","name","host","port","https","insecure","username","password" | "passwordEnv" | "passwordCommand","tag","headers"?,"indices"?}]}. The session file's "server" is a server id. Never print passwords.
+Writes: only reads are sent (GET/HEAD and POST to _search/_count/_msearch/_mget/_explain/_validate/_field_caps/_analyze/_termvectors/templates/scroll/PIT). A write opens a prompt for the user (run once / unlock for this session); unlocks are never read from disk, so editing servers.json cannot unlock anything. A server with credentials asks the user once before its first request. With this tool, configfilepath must be inside ~/.claude/mods/opensearch/.
 The user runs requests (▶ in the editor gutter or ctrl+r); do not run them yourself unless asked.`
 
 const DEFAULT_SERVERS = {
   _help:
-    'One entry per cluster, listed in the pane\'s server menu by name. Fields: id, name, host, port (9200), https, insecure (skip the certificate check), username, password or passwordEnv (an environment variable) or passwordCommand (argv whose output is the password), tag (production | staging | development | local), allowWrites (false: writes ask first), path (URL prefix), headers, indices (extra autocomplete names).',
+    'One entry per cluster, listed in the pane\'s server menu by name. Fields: id, name, host, port (9200), https, insecure (skip the certificate check), username, password or passwordEnv (an environment variable) or passwordCommand (argv whose output is the password), tag (production | staging | development | local), path (URL prefix), headers, indices (extra autocomplete names).',
   servers: [{ id: 'local', name: 'Local', host: 'localhost', port: 9200, https: false, tag: 'local' }],
 }
 
@@ -144,7 +149,7 @@ async function readJson($: EngineInterface, file: string): Promise<any> {
 async function readServers($: EngineInterface): Promise<Server[]> {
   const data = await readJson($, configFile)
   const list: unknown[] = Array.isArray(data?.servers) ? data.servers : []
-  return list.map(x => normalizeServer(x)).filter((s): s is Server => !!s)
+  return uniqueServers(list.map(x => normalizeServer(x)).filter((s): s is Server => !!s)).servers
 }
 
 // The password from the file, an environment variable or a command (keychain, 1Password, pass).
@@ -170,15 +175,29 @@ async function findServer($: EngineInterface, id: string): Promise<Server | unde
   return (await readServers($)).find(s => s.id === id)
 }
 
-// Sets allowWrites on one server in the config file, keeping everything else as written.
-async function setAllowWrites($: EngineInterface, id: string, allow: boolean) {
-  const data = (await readJson($, configFile)) ?? {}
-  const list: any[] = Array.isArray(data.servers) ? data.servers : []
-  const entry = list.find(x => x && (x.id === id || (!x.id && x.name === id)))
-  if (!entry) return
-  if (allow) entry.allowWrites = true
-  else delete entry.allowWrites
-  await $.fs.write(configFile, JSON.stringify(data, null, 2) + '\n')
+// Approved credential fingerprints live in the mod's own store, not in a file the console reads.
+async function isTrusted($: EngineInterface, s: Server): Promise<boolean> {
+  if (!credentialSource(s)) return true
+  const trusted = ((await $.store.get('trusted')) as string[] | undefined) ?? []
+  return trusted.includes(credentialFingerprint(s))
+}
+
+async function trust($: EngineInterface, fingerprint: string) {
+  const trusted = ((await $.store.get('trusted')) as string[] | undefined) ?? []
+  if (!trusted.includes(fingerprint)) await $.store.set('trusted', [...trusted, fingerprint].slice(-200))
+}
+
+async function askTrust($: EngineInterface, s: Server, req: OsPending | null, then: 'run' | 'indices') {
+  await update($, confirm, () => ({
+    kind: 'trust',
+    req,
+    serverId: s.id,
+    serverName: s.name,
+    url: baseUrl(s),
+    source: credentialSource(s) ?? '',
+    fingerprint: credentialFingerprint(s),
+    then,
+  }))
 }
 
 function getModel(r: OsResult): Model {
@@ -269,7 +288,6 @@ async function sync($: EngineInterface) {
         url: baseUrl(s),
         ...(s.tag ? { tag: s.tag } : {}),
         ...(s.indices ? { indices: s.indices } : {}),
-        ...(s.allowWrites ? { allowWrites: true } : {}),
       })),
     )
     const cur = await read($, server)
@@ -279,6 +297,8 @@ async function sync($: EngineInterface) {
     }
   }
   if (await changed($, sessionFile)) {
+    // A prompt answers for the request it shows; any outside change to the console cancels it.
+    if (await read($, confirm)) await update($, confirm, () => null)
     const st = await readJson($, sessionFile)
     if (st) {
       if (typeof st.query === 'string' && st.query !== (await read($, query))) {
@@ -385,6 +405,7 @@ async function refreshIndices($: EngineInterface, name: string) {
   if ((await read($, indicesLoading)) === name) return
   const s = await findServer($, name)
   if (!s) return
+  if (!(await isTrusted($, s))) return askTrust($, s, null, 'indices')
   await update($, indicesLoading, () => name)
   try {
     const creds = await credsFor($, s)
@@ -407,8 +428,9 @@ async function refreshIndices($: EngineInterface, name: string) {
 
 async function ensureIndices($: EngineInterface) {
   const name = await read($, server)
-  const url = ((await read($, servers)) ?? []).find(s => s.id === name)?.url
-  if (name && url && !(await read($, indices))?.[url]) await refreshIndices($, name)
+  const s = await findServer($, name)
+  // Loads names only for a server that needs no credentials or whose credentials the person approved.
+  if (s && !(await read($, indices))?.[baseUrl(s)] && (await isTrusted($, s))) await refreshIndices($, name)
 }
 
 async function run($: EngineInterface) {
@@ -419,18 +441,33 @@ async function run($: EngineInterface) {
   const name = await read($, server)
   const target = await findServer($, name)
   if (!target) return $.ui.toast(`No server "${name}" in ${configFile}`)
-  // Writes are locked per server in the config. A locked server asks the person before anything is sent.
-  const refused = target.allowWrites ? undefined : writeGuard(req)
-  if (refused) {
-    await update($, confirm, () => ({ serverId: target.id, serverName: target.name, method: req.method, path: req.path }))
-    const next: OsResult = {
-      id: Date.now(), server: await read($, server), method: req.method, path: req.path,
-      status: 0, ms: 0, text: refused, error: refused, at: new Date().toISOString(),
-    }
-    await update($, result, () => next)
-    await update($, view, v => ({ ...EMPTY_VIEW, search: v?.search ?? '' }))
+  const pending: OsPending = {
+    serverId: target.id,
+    serverName: target.name,
+    url: baseUrl(target),
+    method: req.method,
+    path: req.path,
+    body: req.body,
+    production: target.tag === 'production',
+  }
+  // Writes ask first, unless the person unlocked this server from the pane in this session.
+  const isWrite = !!writeGuard(req)
+  if (isWrite && !((await read($, unlocked)) ?? []).includes(target.id)) {
+    await update($, confirm, () => ({ kind: 'write', req: pending }))
     return
   }
+  await send($, pending)
+}
+
+// Sends exactly `pending`: the server must still resolve to the same address, and its
+// credentials must be approved. Nothing here reads the editor again.
+async function send($: EngineInterface, pending: OsPending) {
+  const target = await findServer($, pending.serverId)
+  if (!target || baseUrl(target) !== pending.url) {
+    return $.ui.toast(`Not sent: server "${pending.serverName}" changed in ${configFile}. Run it again.`)
+  }
+  if (!(await isTrusted($, target))) return askTrust($, target, pending, 'run')
+  const req = { start: 0, end: 0, method: pending.method, path: pending.path, body: pending.body }
   await update($, running, () => true)
   const started = Date.now()
   let next: OsResult
@@ -446,21 +483,11 @@ async function run($: EngineInterface) {
       status: parsed.status,
       ms: parsed.ms || Date.now() - started,
       text: pretty(parsed.text || (out.exitCode !== 0 ? out.stderr : '')),
-      error: out.exitCode !== 0 ? out.stderr.trim() || `curl exited ${out.exitCode}` : undefined,
+      ...(out.exitCode !== 0 ? { error: out.stderr.trim() || `curl exited ${out.exitCode}` } : {}),
       at: new Date().toISOString(),
     }
   } catch (err) {
-    next = {
-      id: Date.now(),
-      server: target.name,
-      method: req.method,
-      path: req.path,
-      status: 0,
-      ms: Date.now() - started,
-      text: String(err),
-      error: String(err),
-      at: new Date().toISOString(),
-    }
+    next = { id: Date.now(), server: target.name, method: req.method, path: req.path, status: 0, ms: Date.now() - started, text: String(err), error: String(err), at: new Date().toISOString() }
   }
   await update($, result, () => next)
   await update($, view, v => ({ ...EMPTY_VIEW, search: v?.search ?? '' }))
@@ -580,13 +607,21 @@ export const register: Register = on => {
       if ((await $.ui.panes()).some(pane => pane.id === PANE)) await $.ui.close({ id: PANE })
       return { result: 'OpenSearch console closed.' }
     }
+    // An agent may open its own console, but only with a config inside the mod's folder:
+    // pointing the pane at another config is the person's call (/opensearch --configfilepath).
+    if (input.configfilepath) {
+      if (!base) await ensureBase($)
+      const want = await resolvePath($, input.configfilepath, base)
+      const real = (await $.fs.stat(want, { resolve: true }).catch(() => undefined))?.realPath ?? want
+      const root = (await $.fs.stat(base, { resolve: true }).catch(() => undefined))?.realPath ?? base
+      if (!real.startsWith(root + '/')) return { result: `configfilepath must be inside ${base}/. Ask the user to open other configs with /opensearch --configfilepath.`, isError: true }
+    }
     const refused = await attach($, input.filepath, input.configfilepath)
     if (refused) return { result: refused, isError: true }
     let placed = ''
     if (action === 'open') {
       const opened = await $.ui.open({ id: PANE, title: `OpenSearch · ${sessionFile.split('/').pop()}` })
       placed = opened.isPlaced ? 'Pane is open. ' : `Pane not shown yet (${(opened as any).reason ?? 'terminal too narrow'}); the user can type /opensearch. `
-      void ensureIndices($).catch(() => undefined)
     }
     return { result: `${placed}Session file: ${sessionFile}\nResponse file: ${responseFile()}\nConfig file: ${configFile}` }
   })
@@ -628,6 +663,7 @@ export const register: Register = on => {
   on('ui.message', async ($, e) => {
     const data = (e.data ?? {}) as Record<string, any>
     if (e.element === 'editor') {
+      if (data.type !== 'run' && data.type !== 'copy' && (await read($, confirm))) await update($, confirm, () => null)
       if (typeof data.text === 'string') await update($, query, () => data.text)
       if (typeof data.row === 'number') await update($, cursorRow, () => data.row)
       if (data.type === 'copy') {
@@ -685,6 +721,7 @@ export const register: Register = on => {
     const req = requestAt(text, row)
     const target = list.find(s => s.id === current)
     const isMenu = await read($, menuOpen)
+    const isUnlocked = !!target && ((await read($, unlocked)) ?? []).includes(target.id)
     const ask = await read($, confirm)
     const cmd = await read($, editorCmd)
     const help = await read($, showHelp)
@@ -745,14 +782,14 @@ export const register: Register = on => {
           />
           <Button
             key="lock"
-            label={target?.allowWrites ? '🔓 writes on' : '🔒 read-only'}
+            label={isUnlocked ? '🔓 writes on' : '🔒 writes locked'}
             onPress={() =>
               void (async () => {
                 if (!target) return
-                if (target.allowWrites) {
-                  await setAllowWrites($, target.id, false)
+                if (isUnlocked) {
+                  await update($, unlocked, l => (l ?? []).filter(id => id !== target.id))
                   $.ui.toast(`${target.name}: writes locked`)
-                } else await update($, confirm, () => ({ serverId: target.id, serverName: target.name, method: '', path: '' }))
+                } else $.ui.toast('Writes unlock from the prompt that a write opens, one request or one session at a time.')
               })().catch(() => undefined)
             }
           />
@@ -796,6 +833,7 @@ export const register: Register = on => {
                     void (async () => {
                       await update($, server, () => sv.id)
                       await update($, menuOpen, () => false)
+                      await update($, confirm, () => null)
                       await saveSession($)
                       void ensureIndices($).catch(() => undefined)
                     })()
@@ -803,33 +841,69 @@ export const register: Register = on => {
                 />
                 {sv.tag ? <Text color={tagColor(sv.tag)}>{sv.tag}</Text> : null}
                 <Text dimColor>{sv.url}</Text>
-                {sv.allowWrites ? <Text color="warning">writes on</Text> : null}
               </Box>
             ))}
           </Box>
         ) : null}
-        {ask ? (
+        {ask && ask.kind === 'write' ? (
           <Box flexDirection="column" borderStyle="round" borderColor="#f14c4c" backgroundColor="#1e1e1e" paddingX={1}>
-            <Text bold color="error">Writes are locked for {ask.serverName}</Text>
-            {ask.method ? <Text>{`${ask.method} ${ask.path} can change data on this server.`}</Text> : null}
-            <Text dimColor>{`servers.json has allowWrites off for "${ask.serverId}". Unlock writes for this server?`}</Text>
+            <Text bold color="error">{`Writes are locked for ${ask.req.serverName}`}</Text>
+            <Text>{`${ask.req.method} ${ask.req.url}/${ask.req.path.replace(/^\/+/, '')}`}</Text>
+            {ask.req.body ? <Text dimColor wrap="truncate-end">{`body: ${ask.req.body.replace(/\s+/g, ' ').slice(0, 300)}`}</Text> : <Text dimColor>no body</Text>}
+            <Text dimColor>This request can change data. Yes sends exactly what is shown here.</Text>
             <Box flexDirection="row" gap={2} height={1}>
               <Button
-                key="confirm-yes"
-                label={ask.method ? 'Yes, unlock and run' : 'Yes, unlock'}
+                key="confirm-once"
+                label="Run this request once"
                 variant="primary"
                 onPress={() =>
                   void (async () => {
-                    await setAllowWrites($, ask.serverId, true)
+                    const req = ask.req
                     await update($, confirm, () => null)
-                    seen[configFile] = -1
-                    await sync($)
-                    $.ui.toast(`${ask.serverName}: writes unlocked in servers.json`)
-                    if (ask.method) await run($)
+                    await send($, req)
                   })().catch(() => undefined)
                 }
               />
-              <Button key="confirm-no" label="No" onPress={() => void update($, confirm, () => null)} />
+              {ask.req.production ? null : (
+                <Button
+                  key="confirm-session"
+                  label="Unlock for this session"
+                  onPress={() =>
+                    void (async () => {
+                      const req = ask.req
+                      await update($, unlocked, l => [...new Set([...(l ?? []), req.serverId])])
+                      await update($, confirm, () => null)
+                      $.ui.toast(`${req.serverName}: writes unlocked until this session ends (🔓 locks again)`)
+                      await send($, req)
+                    })().catch(() => undefined)
+                  }
+                />
+              )}
+              <Button key="confirm-no" label="Cancel" onPress={() => void update($, confirm, () => null)} />
+            </Box>
+          </Box>
+        ) : null}
+        {ask && ask.kind === 'trust' ? (
+          <Box flexDirection="column" borderStyle="round" borderColor="#d7a700" backgroundColor="#1e1e1e" paddingX={1}>
+            <Text bold color="warning">{`Send credentials to ${ask.serverName}?`}</Text>
+            <Text>{`${ask.url} gets ${ask.source}.`}</Text>
+            <Text dimColor>Asked once per server, and again whenever its host or credential source changes in the config.</Text>
+            <Box flexDirection="row" gap={2} height={1}>
+              <Button
+                key="trust-yes"
+                label="Allow"
+                variant="primary"
+                onPress={() =>
+                  void (async () => {
+                    const a = ask
+                    await trust($, a.fingerprint)
+                    await update($, confirm, () => null)
+                    if (a.then === 'run' && a.req) await send($, a.req)
+                    else await refreshIndices($, a.serverId)
+                  })().catch(() => undefined)
+                }
+              />
+              <Button key="trust-no" label="Cancel" onPress={() => void update($, confirm, () => null)} />
             </Box>
           </Box>
         ) : null}

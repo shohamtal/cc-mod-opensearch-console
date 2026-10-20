@@ -147,8 +147,9 @@ describe('servers', () => {
   })
 
   test('the new shape keeps its fields and gets the default port', async () => {
+    // allowWrites in a config file is ignored: writes unlock only from the pane.
     const s = normalizeServer({ id: 'eu', name: 'Production EU', host: '10.0.0.5', tag: 'production', passwordEnv: 'OS_PW', allowWrites: true, tag2: 'x' })!
-    expect(s).toEqual({ id: 'eu', name: 'Production EU', host: '10.0.0.5', port: 9200, https: false, passwordEnv: 'OS_PW', tag: 'production', allowWrites: true })
+    expect(s).toEqual({ id: 'eu', name: 'Production EU', host: '10.0.0.5', port: 9200, https: false, passwordEnv: 'OS_PW', tag: 'production' })
     expect(baseUrl(s)).toBe('http://10.0.0.5:9200')
   })
 

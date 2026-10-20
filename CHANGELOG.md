@@ -2,8 +2,9 @@
 
 ## 0.2.0
 
-- **Any number of servers** in a ▾ menu. A server is `{id, name, host, port, https, insecure, username, password | passwordEnv | passwordCommand, tag, allowWrites, path, headers, indices}`, and old `{name, url}` entries still work.
-- **Writes are locked per server** (`allowWrites`, off by default). A write on a locked server asks to unlock it instead of being refused, and 🔓 locks it again.
+- **Any number of servers** in a ▾ menu. A server is `{id, name, host, port, https, insecure, username, password | passwordEnv | passwordCommand, tag, path, headers, indices}`, and old `{name, url}` entries still work.
+- **Writes ask first** instead of being refused. A prompt shows the exact request (method, URL, body). **Run once** sends exactly that; **Unlock for this session** (not for production) holds the unlock in memory only, and 🔓 locks again.
+- **Credentials ask first:** a server that sends a password or headers needs your OK once, keyed to its host and credential source.
 - **Editor:** undo/redo (`alt+z` / `alt+y`, or ↶ ↷), and the agent's injected text can be undone too. Autocomplete covers methods, endpoints, `_cat/` and `_cluster/` paths, query parameters and query DSL keys.
 - **Fixes:**
   - Control characters in pasted or injected text no longer break the editor.

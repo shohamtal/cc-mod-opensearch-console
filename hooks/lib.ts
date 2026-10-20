@@ -359,7 +359,6 @@ export type Server = {
   path?: string
   headers?: Record<string, string>
   indices?: string[]
-  allowWrites?: boolean
 }
 
 const TAGS = new Set(['production', 'staging', 'development', 'local'])
@@ -398,7 +397,6 @@ export function normalizeServer(raw: unknown, defaultPort = 9200): Server | unde
   if (path) s.path = path.startsWith('/') ? path : `/${path}`
   if (r.headers && typeof r.headers === 'object') s.headers = Object.fromEntries(Object.entries(r.headers as Record<string, unknown>).filter(([, v]) => typeof v === 'string')) as Record<string, string>
   if (Array.isArray(r.indices)) s.indices = r.indices.map(String)
-  if (r.allowWrites === true) s.allowWrites = true
   return s
 }
 
@@ -410,3 +408,37 @@ export const tagColor = (tag?: ServerTag) => (tag === 'production' ? 'error' : t
 
 // Clipboard readers, tried in turn: macOS, Wayland, X11, Windows.
 export const PASTE_COMMANDS = [['pbpaste'], ['wl-paste', '-n'], ['xclip', '-o', '-selection', 'clipboard'], ['powershell.exe', '-NoProfile', '-Command', 'Get-Clipboard']]
+
+// Servers that send credentials need the person's OK before the first request: the host and
+// where the secret comes from, so a changed config (an agent can write it) never sends a secret
+// somewhere new on its own. The fingerprint changes when any of those change.
+export function credentialSource(s: Server): string | undefined {
+  const parts: string[] = []
+  if (s.username) {
+    if (s.passwordCommand) parts.push(`password from the command \`${s.passwordCommand.join(' ')}\``)
+    else if (s.passwordEnv) parts.push(`password from $${s.passwordEnv}`)
+    else parts.push('password from servers.json')
+    parts.unshift(`user ${s.username}`)
+  }
+  if (s.headers && Object.keys(s.headers).length) parts.push(`headers ${Object.keys(s.headers).join(', ')}`)
+  return parts.length ? parts.join(', ') : undefined
+}
+
+export function credentialFingerprint(s: Server): string {
+  return JSON.stringify([baseUrl(s), s.insecure ?? false, s.username ?? '', s.passwordCommand ?? null, s.passwordEnv ?? null, s.password === undefined ? null : 'file', s.headers ?? null])
+}
+
+// The first entry wins when ids repeat (trimmed, as normalizeServer reads them).
+export function uniqueServers(list: Server[]): { servers: Server[]; duplicates: string[] } {
+  const seen = new Set<string>()
+  const servers: Server[] = []
+  const duplicates: string[] = []
+  for (const s of list) {
+    if (seen.has(s.id)) duplicates.push(s.id)
+    else {
+      seen.add(s.id)
+      servers.push(s)
+    }
+  }
+  return { servers, duplicates }
+}

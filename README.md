@@ -2,7 +2,7 @@
 
 A Kibana / OpenSearch Dashboards **Dev Tools-style console** for **OpenSearch and Elasticsearch** that lives in a Claude Code side pane.
 Claude writes queries into it, you read, edit and run them, and Claude reads the response back.
-Works with OpenSearch and Elasticsearch through the REST API they share, and **writes are locked until you unlock them**.
+Works with OpenSearch and Elasticsearch through the REST API they share, and **every write asks you first**.
 
 ![Claude Code with the console docked on the right: Claude reads the response the user just ran and summarizes it](docs/claude-reads-response.png)
 
@@ -13,7 +13,7 @@ This mod keeps you in the loop instead:
 
 - **The agent proposes, you dispose.** Claude injects the query into the editor; you see it, tweak it, and press ▶ yourself.
 - **A real response viewer.** Colored JSON with folding, search and copy, instead of a wall of text.
-- **Nothing writes to your cluster unless you say so.** Writes are locked per server until you unlock them (see [Writes are locked by default](#writes-are-locked-by-default)).
+- **Nothing writes to your cluster unless you say so.** Every write shows you the exact request first (see [Writes are locked](#writes-are-locked)).
 
 ## How it looks
 
@@ -97,7 +97,6 @@ On first use the mod creates `~/.claude/mods/opensearch/servers.json` with one `
 | `insecure` | Skip the certificate check (self-signed certs, port-forwards, Elasticsearch 8's default HTTPS) |
 | `username` + one of `password`, `passwordEnv` (an environment variable), `passwordCommand` (argv whose output is the password: Keychain, 1Password, `pass`) | Basic auth |
 | `tag` | `production`, `staging`, `development` or `local`. Production is shown in red |
-| `allowWrites` | `false` by default: only reads are sent, and a write asks you first |
 | `path`, `headers`, `indices` | URL prefix behind a proxy, extra headers (for example `Authorization: ApiKey …`), extra autocomplete names |
 
 Older configs with a single `url` field still work.
@@ -130,21 +129,31 @@ Writes to these files show up in the pane within a second, and your edits are wr
 Each console keeps its own query, server and last response. Relative names live under `~/.claude/mods/opensearch/sessions/`.
 Agents can do the same through the `mcp__opensearch-console__console` tool (`action`: open / close / status, `filepath`, `configfilepath`); its description tells the model the whole protocol.
 
-## Writes are locked by default
+## Writes are locked
 
-On a server without `allowWrites`, the console only sends requests that read:
+The console sends only requests that read:
 
 - `GET` and `HEAD`
 - `POST` to `_search`, `_msearch`, `_count`, `_mget`, `_explain`, `_validate`, `_field_caps`, `_analyze`, `_termvectors`, `_mtermvectors`, `_rank_eval`, search templates, scroll and point-in-time (OpenSearch `_search/point_in_time`, Elasticsearch `_pit`)
 - `DELETE` only to clear a scroll or point-in-time
 
-Anything else (`PUT`, `PATCH`, `_bulk`, `_doc`, `_update`, `_delete_by_query`, `_update_by_query`, `_reindex`, `_aliases`, `_close`, `_forcemerge`, …) is not sent. Instead the pane asks: **Writes are locked for this server. Unlock?** **Yes** sets `allowWrites` for that server in `servers.json` and sends the request; **🔓** in the top bar locks it again. Agents are told never to change `allowWrites` themselves.
+Anything else (`PUT`, `PATCH`, `_bulk`, `_doc`, `_update`, `_delete_by_query`, `_reindex`, `_aliases`, `_close`, …) opens a prompt that shows the **exact request** (method, full URL, body):
 
-- **Whole routes:** the guard matches whole routes (`<index>/_search`, `<index>/_explain/<id>`, `_search/scroll/<id>`, …), not path endings, so a read-looking word used as a document, script or snapshot id doesn't pass.
-- **Exact path:** paths with `#`, `%`-encoding, `.`/`..` or empty segments, whitespace or backslashes are refused, so the guard always judges the exact path curl sends.
-- **Literal bodies:** request bodies go as `data-raw`, so a body starting with `@` is sent as text and never makes curl read a local file. URL globbing is off.
-The guard lives in [`hooks/lib.ts`](hooks/lib.ts) (`writeGuard`) and is covered by tests.
-Defense in depth still matters: point the console at a **read-only user** where you can.
+- **Run this request once:** sends exactly what the prompt shows, even if the editor changed meanwhile.
+- **Unlock for this session:** later writes to this server go out without asking until Claude Code exits. This option doesn't exist for servers tagged `production`. **🔓** locks the server again.
+- **Cancel**
+
+Unlocks live in memory only. No file the console reads can unlock writes, so an agent editing `servers.json` can't either.
+
+**Credentials ask first.** A server that sends a password or headers asks once before its first request, *"Send credentials to <server>? https://… gets user reader, password from $OS_PW"*. It asks again whenever the server's host or credential source changes in the config, so a config change can't send your secret somewhere new silently.
+
+The guard lives in [`hooks/lib.ts`](hooks/lib.ts) (`writeGuard`) and is covered by tests. Path tricks are refused, so the guard always judges the exact path curl sends:
+- `#` fragments
+- `%`-encoding
+- `.` or `..` segments
+- whitespace
+
+Request bodies go as `data-raw`, so a body starting with `@` is never read from a local file. Use a read-only cluster user where you can.
 
 ## Keys
 
