@@ -1,6 +1,6 @@
 {
   "name": "opensearch-console",
-  "version": "0.2.1",
+  "version": "0.2.2",
   "description": "OpenSearch & Elasticsearch Dev Tools-style console in a Claude Code side pane: Claude injects queries, you edit and run them (read-only).",
   "types": "./types/index.d.ts",
   "author": {
