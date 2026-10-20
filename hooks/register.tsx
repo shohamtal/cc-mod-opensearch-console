@@ -514,7 +514,13 @@ let saving: Promise<void> = Promise.resolve()
 let badJson = ''
 function saveSession($: EngineInterface, extra: Record<string, unknown> = {}, file = sessionFile): Promise<void> {
   const run = saving.then(() => saveSessionNow($, extra, file))
-  saving = run.catch(err => $.ui.toast(`Not saved: ${file}: ${String(err).slice(0, 160)}`))
+  saving = run.catch(err => {
+    try {
+      $.ui.toast(`Not saved: ${file}: ${String(err).slice(0, 160)}`)
+    } catch {
+      // the chain must go on even if the toast can't show
+    }
+  })
   return run
 }
 
