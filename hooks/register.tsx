@@ -56,7 +56,7 @@ const HELP = `**Top bar**
 - \`ctrl+r\` / \`ctrl+enter\` or click **▶** in the gutter — run that request
 - Select: shift+arrows, mouse drag, shift+click · \`ctrl+a\` select all
 - \`ctrl+c\` copy · \`ctrl+x\` cut · \`ctrl+v\` paste (or your terminal's paste) · Backspace/Delete/typing replace the selection
-- \`ctrl+z\` undo · \`ctrl+y\` / \`ctrl+shift+z\` redo (or the ↶ ↷ buttons, if your terminal takes ctrl+z)
+- \`alt+z\` undo · \`alt+y\` / \`alt+shift+z\` redo, or the ↶ ↷ buttons (\`ctrl+z\` suspends Claude Code)
 - \`ctrl+l\` format · Home/End or \`ctrl+e\` line end · \`ctrl+k\` delete to line end · Tab = 2 spaces
 - Autocomplete: methods, index names, endpoints (\`_search\`, \`_cat/…\`), query parameters after \`?\`, and query DSL keys inside \`"…"\` · ↑↓ pick, Tab/Enter accept (index names are cached in \`indices.json\`)
 - Syntax: \`METHOD path\` line, then an optional JSON body; several requests per file
@@ -197,7 +197,7 @@ function getModel(r: OsResult): Model {
 }
 
 function matchesOf(m: Model, term: string) {
-  const key = `${m.id}\u0000${term}`
+  const key = JSON.stringify([m.id, term])
   if (matchCache?.key !== key) matchCache = { key, paths: findMatches(m.all, term) }
   return matchCache.paths
 }
@@ -248,6 +248,15 @@ async function changed($: EngineInterface, file: string): Promise<boolean> {
   return true
 }
 
+// The session file may name a server by its display name (older files): match it to an id.
+async function resolveServer($: EngineInterface) {
+  const list = (await read($, servers)) ?? []
+  const cur = await read($, server)
+  if (!list.length || list.some(s => s.id === cur)) return
+  const byName = list.find(s => s.name === cur)
+  await update($, server, () => (byName ?? list[0]!).id)
+}
+
 async function sync($: EngineInterface) {
   if (!sessionFile) return
   if (await changed($, configFile)) {
@@ -283,6 +292,7 @@ async function sync($: EngineInterface) {
       }
     }
   }
+  await resolveServer($)
   if (await changed($, indicesFile())) {
     const data = (await readJson($, indicesFile())) ?? {}
     const map: Record<string, string[]> = {}
@@ -329,7 +339,8 @@ async function attach($: EngineInterface, file?: string, config?: string): Promi
   if (!(await $.fs.exists(nextFile))) {
     // A new console starts from the old single-file console when there is one.
     const legacy = nextFile === `${base}/sessions/default.json` ? await $.fs.read(`${base}/console.http`).catch(() => undefined) : undefined
-    const first = (await readJson($, nextConfig))?.servers?.[0]?.name ?? ''
+    const firstRaw = (await readJson($, nextConfig))?.servers?.[0]
+    const first = firstRaw?.id ?? firstRaw?.name ?? ''
     await $.fs.write(nextFile, JSON.stringify({ server: first, cursorRow: 0, query: legacy ?? DEFAULT_CONSOLE }, null, 2) + '\n')
   }
   if (nextFile !== sessionFile || nextConfig !== configFile) {
@@ -684,7 +695,9 @@ export const register: Register = on => {
     const known = [...new Set([...(target?.indices ?? []), ...(((await read($, indices)) ?? {})[target?.url ?? ''] ?? [])])].filter(n => (budget -= n.length + 3) > 0)
 
     const fixed = 11
-    const editorHeight = Math.max(4, Math.floor((rows - fixed) * 0.4))
+    // An open menu or prompt sits under the toolbar; the editor gives up its rows.
+    const extra = isMenu ? Math.max(1, list.length) + 2 : ask ? (ask.method ? 6 : 5) : 0
+    const editorHeight = Math.max(3, Math.floor((rows - fixed) * 0.4) - extra)
     viewerHeight = Math.max(4, rows - fixed - editorHeight)
     editorBottom = 2 + editorHeight
 
@@ -771,7 +784,7 @@ export const register: Register = on => {
           </Text>
         </Text>
         {isMenu ? (
-          <Box position="absolute" top={1} left={0} flexDirection="column" borderStyle="round" borderColor="#4ec9b0" backgroundColor="#1e1e1e" paddingX={1}>
+          <Box flexDirection="column" borderStyle="round" borderColor="#4ec9b0" backgroundColor="#1e1e1e" paddingX={1}>
             {list.length === 0 && <Text color="error">no servers in {configFile}</Text>}
             {list.map(sv => (
               <Box flexDirection="row" gap={1} height={1}>
@@ -796,7 +809,7 @@ export const register: Register = on => {
           </Box>
         ) : null}
         {ask ? (
-          <Box position="absolute" top={2} left={2} flexDirection="column" borderStyle="round" borderColor="#f14c4c" backgroundColor="#1e1e1e" paddingX={1}>
+          <Box flexDirection="column" borderStyle="round" borderColor="#f14c4c" backgroundColor="#1e1e1e" paddingX={1}>
             <Text bold color="error">Writes are locked for {ask.serverName}</Text>
             {ask.method ? <Text>{`${ask.method} ${ask.path} can change data on this server.`}</Text> : null}
             <Text dimColor>{`servers.json has allowWrites off for "${ask.serverId}". Unlock writes for this server?`}</Text>

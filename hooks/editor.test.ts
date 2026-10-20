@@ -1,6 +1,6 @@
 import { expect, test } from 'claude-code/testing'
 
-import { suggest } from './editor'
+import { suggest, suggestFreeInit } from './editor'
 
 const st = (line: string) => ({ lines: [line], row: 0, col: line.length, top: 0, rev: 0 })
 const NAMES = ['products', 'products_v2', 'prod-reviews', 'reviews', '.kibana']
@@ -35,4 +35,9 @@ test('query DSL words inside a JSON key, nowhere else', async () => {
 
 test('an accepted suggestion stays hidden until the word changes', async () => {
   expect(suggest({ ...st('GET prod'), sugHide: '0:4:prod' }, NAMES)).toBeUndefined()
+})
+
+test('control characters never reach the drawing', async () => {
+  const { lines } = suggestFreeInit('GET x\x1b[<0;141;4M\tz\r\n\x07ok')
+  expect(lines).toEqual(['GET x[<0;141;4M  z', 'ok'])
 })

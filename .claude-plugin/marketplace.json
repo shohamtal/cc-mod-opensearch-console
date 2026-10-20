@@ -3,6 +3,9 @@
   "owner": {
     "name": "shohamtal"
   },
+  "metadata": {
+    "description": "An OpenSearch & Elasticsearch Dev Tools-style console for Claude Code, as a side-pane mod."
+  },
   "plugins": [
     {
       "name": "opensearch-console",

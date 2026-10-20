@@ -34,9 +34,13 @@ This mod keeps you in the loop instead:
 | **Servers** | Any number of clusters in a **▾ menu**, tagged production / staging / development / local; passwords from the file, an environment variable or a command |
 | **Agents** | One JSON file per console, so several sessions or agents never overwrite each other; a tool documents the protocol for the model |
 
-| Find in the response | Folding | Built-in help |
+| Server menu | Write lock | Find in the response |
 |---|---|---|
-| ![search](docs/search.png) | ![folding](docs/folding.png) | ![help](docs/help.png) |
+| ![server menu](docs/server-menu.png) | ![write lock](docs/write-lock.png) | ![search](docs/search.png) |
+
+| Folding | Built-in help |
+|---|---|
+| ![folding](docs/folding.png) | ![help](docs/help.png) |
 
 > All screenshots come from a throwaway demo session against made-up data ([`demo/mock_opensearch.py`](demo/mock_opensearch.py)), not a real cluster or terminal.
 
@@ -146,7 +150,7 @@ Defense in depth still matters: point the console at a **read-only user** where 
 
 | Where | Keys |
 |---|---|
-| Editor | `ctrl+r` run · `ctrl+z` / `ctrl+y` undo / redo · `ctrl+l` format · shift+arrows / drag select · `ctrl+a` select all · `ctrl+c` / `ctrl+x` / `ctrl+v` · `ctrl+k` kill to end of line · Tab / Enter accept autocomplete |
+| Editor | `ctrl+r` run · `alt+z` / `alt+y` undo / redo (or ↶ ↷; `ctrl+z` suspends Claude Code) · `ctrl+l` format · shift+arrows / drag select · `ctrl+a` select all · `ctrl+c` / `ctrl+x` / `ctrl+v` · `ctrl+k` kill to end of line · Tab / Enter accept autocomplete |
 | Response | ↑↓ `j` `k` · PgUp / PgDn · `g` / `G` · Enter / Space / click fold · ←/→ · `e` / `c` · `1`–`9` · `/` or `ctrl+f` find · `n` / `N` · `y` copy |
 | Anywhere | Mouse wheel scrolls the half under the pointer · Esc returns to the prompt · `/opensearch` toggles the pane |
 

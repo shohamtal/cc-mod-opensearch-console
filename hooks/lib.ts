@@ -163,8 +163,9 @@ export function pretty(text: string): string {
 
 // ---- the viewer's tree ----
 
-const esc = (k: string) => k.replace(/~/g, '~0').replace(/\//g, '~1')
-export const END = '\u0000end'
+const esc = (k: string) => k.replace(/~/g, '~0').replace(/\//g, '~1').replace(/#/g, '~2')
+// Marks a closing-bracket line. `#` never appears in a path: esc() encodes it as ~2.
+export const END = '#end'
 
 export function parseJson(text: string): { ok: true; value: unknown } | { ok: false } {
   try {

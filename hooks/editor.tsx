@@ -65,8 +65,14 @@ function lex(line: string): [string, string][] {
   return out
 }
 
+// Control characters can't be drawn (the engine refuses the tree): tabs become two spaces,
+// the rest are dropped. Applies to typed keys, pastes and text written into the session file.
+const clean = (t: string) => t.replace(/\r\n?/g, '\n').replace(/\t/g, '  ').replace(/[\x00-\x08\x0b-\x1f\x7f]/g, '')
+
+export const suggestFreeInit = (text: string) => init({ text, rev: 0, height: 5, row: 0 })
+
 const init = (p: Props): State => {
-  const lines = p.text.split('\n')
+  const lines = clean(p.text).split('\n')
   const row = Math.min(Math.max(0, p.row), lines.length - 1)
   return { lines, row, col: 0, top: Math.max(0, row - 2), rev: p.rev, pasteId: p.paste?.id, scrollId: p.scroll?.id, cmdId: p.cmd?.id }
 }
@@ -102,7 +108,7 @@ const insert = (s0: State, text: string): State => {
   const s = deleteSelection(s0)
   const lines = [...s.lines]
   const cur = lines[s.row]
-  const parts = text.replace(/\r\n?/g, '\n').split('\n')
+  const parts = clean(text).split('\n')
   const head = cur.slice(0, s.col)
   const tail = cur.slice(s.col)
   if (parts.length === 1) {
