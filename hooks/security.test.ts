@@ -9,12 +9,12 @@ const BASE = `${HOME}/.claude/mods/opensearch`
 const PANE = { plugin: 'opensearch-console', surface: 'terminal', component: 'Pane', requestId: 'opensearch', props: { title: 'OpenSearch', isFocused: true, bodyColumns: 110, placement: 'dock' }, viewport: { columns: 110, rows: 44 } } as any
 
 // Files, HOME, panes and processes beneath the plugin; every process run is recorded.
-function world(on: On, servers: unknown[]) {
+function world(on: On, servers: unknown[], opts: { windows?: boolean } = {}) {
   const files = new Map<string, string>([[`${BASE}/servers.json`, JSON.stringify({ servers })]])
   const runs: { argv: readonly string[]; stdin?: string }[] = []
   let tick = 1
   const mtimes = new Map<string, number>()
-  mock.env(on, { HOME })
+  mock.env(on, opts.windows ? { HOME, OS: 'Windows_NT', SystemRoot: 'C:\\Windows' } : { HOME })
   mock.store(on)
   const clock = mock.clock(on)
   on('fs.exists', ($, e) => ({ value: files.has(e.path) }))
@@ -36,7 +36,10 @@ function world(on: On, servers: unknown[]) {
   on('process.run', ($, e) => {
     runs.push({ argv: e.argv, stdin: e.init?.stdin })
     const isCurl = e.argv[0] === 'curl'
-    return { value: { exitCode: 0, stdout: isCurl ? '{"ok":true}\n__OSCONSOLE__200 0.01' : 'secret-from-command\n', stderr: '', isStdoutTruncated: false, isStderrTruncated: false } } as any
+    // On Windows without Git Bash there is no printenv; cmd's `set` lists matching variables.
+    if (opts.windows && e.argv[0] === 'printenv') throw new Error('ENOENT printenv')
+    const other = opts.windows && e.argv[0] === 'C:/Windows/System32/cmd.exe' ? 'OS_PW_OLD=old\r\nOS_PW=pw\r\n' : 'secret-from-command\n'
+    return { value: { exitCode: 0, stdout: isCurl ? '{"ok":true}\n__OSCONSOLE__200 0.01' : other, stderr: '', isStdoutTruncated: false, isStderrTruncated: false } } as any
   })
   const curls = () => runs.filter(r => r.argv[0] === 'curl')
   // Writes a file as an outside writer (an agent) would: new content, newer mtime.
@@ -272,5 +275,20 @@ describe('credentials', () => {
   test('duplicate server ids: the first entry wins everywhere', async () => {
     const list = [normalizeServer({ id: ' x ', host: 'a' })!, normalizeServer({ id: 'x', host: 'b' })!]
     expect(uniqueServers(list)).toEqual({ servers: [list[0]], duplicates: ['x'] })
+  })
+})
+
+describe('Windows password variables', () => {
+  test('on Windows, passwordEnv is read with System32 cmd set, never printenv, exactly that variable', async ($, on) => {
+    const w = world(on, [{ id: 'w', name: 'W', host: '127.0.0.1', username: 'u', passwordEnv: 'OS_PW' }], { windows: true })
+    const ui = await openConsole($)
+    await ui.post({ type: 'run', text: 'GET _cluster/health', row: 0 }, { in: 'editor' })
+    const trust = await ui.find({ key: 'trust-yes' })
+    expect(trust).toBeDefined()
+    await ui.press({ key: 'trust-yes' })
+    expect(w.runs.map(r => r.argv[0])).toEqual(['C:/Windows/System32/cmd.exe', 'curl'])
+    expect(w.runs[0]!.argv).toEqual(['C:/Windows/System32/cmd.exe', '/d', '/c', 'set', 'OS_PW'])
+    expect(w.curls()[0]!.stdin).toContain('pw')
+    expect(w.curls()[0]!.stdin).not.toContain('old')
   })
 })

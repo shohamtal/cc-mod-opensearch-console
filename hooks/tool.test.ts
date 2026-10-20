@@ -76,3 +76,57 @@ describe('the console tool reads its arguments from the call', () => {
     expect(text(r)).toContain('Config file not found')
   })
 })
+
+describe('backslashes off Windows', () => {
+  test('a sibling folder named opensearch\\x is not inside the mod folder', async ($, on) => {
+    const w = world(on)
+    w.files.set(`${HOME}/.claude/mods/opensearch\\x/c.json`, JSON.stringify({ servers: [] }))
+    const r = await $.tool.call({ tool: TOOL, action: 'status', configfilepath: '~/.claude/mods/opensearch\\x/c.json' } as any)
+    expect((r as any).isError).toBe(true)
+  })
+})
+
+describe('Windows', () => {
+  // No HOME, a USERPROFILE with backslashes, real paths reported with backslashes, and no printenv.
+  function windows(on: On) {
+    const WBASE = 'C:/Users/dev/.claude/mods/opensearch'
+    const files = new Map<string, string>([[`${WBASE}/servers.json`, JSON.stringify({ servers: [{ id: 'w', host: '127.0.0.1', username: 'u', passwordEnv: 'OS_PW' }] })]])
+    const runs: string[][] = []
+    // This test runs on macOS / Linux, where the engine resolves `C:/…` against the working folder.
+    const win = (p: string) => p.replace(/^.*?(?=[A-Za-z]:\/)/, '')
+    mock.env(on, { USERPROFILE: 'C:\\Users\\dev', OS: 'Windows_NT' })
+    on('fs.exists', ($, e) => ({ value: files.has(win(e.path)) }))
+    on('fs.read', ($, e) => {
+      if (!files.has(win(e.path))) throw new Error(`ENOENT ${e.path}`)
+      return { value: files.get(win(e.path))! }
+    })
+    on('fs.write', ($, e) => {
+      files.set(win(e.path), e.text)
+      return { value: undefined }
+    })
+    on('fs.stat', ($, e) => {
+      if (!files.has(win(e.path)) && win(e.path) !== WBASE) throw new Error(`ENOENT ${e.path}`)
+      return { value: { kind: 'file', size: 1, mtimeMs: 0, isLink: false, realPath: win(e.path).replace(/\//g, '\\') } }
+    })
+    on('ui.open', () => ({ value: { isPlaced: true } }) as any)
+    on('ui.panes', () => ({ value: [] }) as any)
+    on('process.run', ($, e) => {
+      runs.push([...e.argv])
+      if (e.argv[0] === 'printenv') throw new Error('ENOENT printenv')
+      return { value: { exitCode: 0, stdout: 'OS_PW_OLD=x\r\nOS_PW=pw\r\n', stderr: '', isStdoutTruncated: false, isStderrTruncated: false } } as any
+    })
+    return { WBASE, files, runs }
+  }
+
+  test('the mod folder is under USERPROFILE, and a config inside it passes the tool check', async ($, on) => {
+    const w = windows(on)
+    w.files.set(`${w.WBASE}/other.json`, JSON.stringify({ servers: [] }))
+    const r = await $.tool.call({ tool: TOOL, action: 'status', filepath: 'win', configfilepath: 'other.json' } as any)
+    expect(text(r)).toContain(`${w.WBASE}/sessions/win.json`)
+    expect(text(r)).toContain(`${w.WBASE}/other.json`)
+    const abs = await $.tool.call({ tool: TOOL, action: 'status', configfilepath: 'C:\\Users\\dev\\.claude\\mods\\opensearch\\other.json' } as any)
+    expect(text(abs)).toContain(`${w.WBASE}/other.json`)
+    const out = await $.tool.call({ tool: TOOL, action: 'status', configfilepath: 'D:\\x\\servers.json' } as any)
+    expect((out as any).isError).toBe(true)
+  })
+})

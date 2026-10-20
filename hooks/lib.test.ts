@@ -3,6 +3,7 @@ import { describe, expect, test } from 'claude-code/testing'
 import {
   ancestorsOpen, buildLines, curlConfig, findMatches, foldablePaths, formatAt, highlight,
   lineText, parseCurlOutput, parseRequests, requestAt, requestBody, writeGuard, parseArgs, normalizeServer, baseUrl, duplicateKey, sentBody, asciiView, pageFrom,
+  toSlash, isAbsolutePath, homeOf, fromCmdSet, ENV_NAME,
 } from './lib'
 
 const CONSOLE = `GET _cluster/health
@@ -187,5 +188,28 @@ describe('the write prompt draws one column per character', () => {
     const b = pageFrom(text, a.end, 40, 10)
     expect(b.rows[0]).toBe('abcdefghijabcdefghij')
     expect(b.end).toBe(text.length)
+  })
+})
+
+describe('Windows', () => {
+  test('home falls back to USERPROFILE, with forward slashes', async () => {
+    expect(homeOf('/Users/dev', 'C:\\Users\\dev', false)).toBe('/Users/dev')
+    expect(homeOf(undefined, 'C:\\Users\\dev', true)).toBe('C:/Users/dev')
+    expect(homeOf('', 'C:\\Users\\dev\\', true)).toBe('C:/Users/dev')
+    expect(homeOf(undefined, 'C:\\Users\\dev', false)).toBe('')
+    expect(homeOf('/home/a\\b', undefined, false)).toBe('/home/a\\b')
+    expect(homeOf(undefined, undefined, true)).toBe('')
+  })
+  test('drive and UNC paths are absolute; backslashes become slashes', async () => {
+    for (const p of ['/etc/x', 'C:\\x\\y.json', 'c:/x', '\\\\srv\\share\\x']) expect(isAbsolutePath(p)).toBe(true)
+    for (const p of ['x.json', 'sub\\x.json', 'C:x', '..\\x']) expect(isAbsolutePath(p)).toBe(false)
+    expect(toSlash('C:\\Users\\dev\\.claude')).toBe('C:/Users/dev/.claude')
+  })
+  test("cmd's set output yields only the exact variable", async () => {
+    expect(fromCmdSet('OS_PASS_OLD=a\r\nOS_PASS=s3=cr=t\r\n', 'OS_PASS')).toBe('s3=cr=t')
+    expect(fromCmdSet('os_pass=x\r\n', 'OS_PASS')).toBe('x')
+    expect(fromCmdSet('OS_PASS_OLD=a\r\n', 'OS_PASS')).toBeUndefined()
+    for (const n of ['A&B', 'A B', '%X%', 'A|calc', '']) expect(ENV_NAME.test(n)).toBe(false)
+    expect(ENV_NAME.test('OS_PASS_1')).toBe(true)
   })
 })
