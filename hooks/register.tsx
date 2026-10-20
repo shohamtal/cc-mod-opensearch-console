@@ -189,7 +189,7 @@ async function trust($: EngineInterface, fingerprint: string) {
 
 async function askTrust($: EngineInterface, s: Server, req: OsPending | null, then: 'run' | 'indices') {
   await update($, confirm, () => ({
-    kind: 'trust',
+    kind: 'trust' as const,
     req,
     serverId: s.id,
     serverName: s.name,
@@ -453,7 +453,7 @@ async function run($: EngineInterface) {
   // Writes ask first, unless the person unlocked this server from the pane in this session.
   const isWrite = !!writeGuard(req)
   if (isWrite && !((await read($, unlocked)) ?? []).includes(target.id)) {
-    await update($, confirm, () => ({ kind: 'write', req: pending }))
+    await update($, confirm, () => ({ kind: 'write' as const, req: pending }))
     return
   }
   await send($, pending)
@@ -733,7 +733,7 @@ export const register: Register = on => {
 
     const fixed = 11
     // An open menu or prompt sits under the toolbar; the editor gives up its rows.
-    const extra = isMenu ? Math.max(1, list.length) + 2 : ask ? (ask.method ? 6 : 5) : 0
+    const extra = isMenu ? Math.max(1, list.length) + 2 : ask ? (ask.kind === 'write' ? 7 : 6) : 0
     const editorHeight = Math.max(3, Math.floor((rows - fixed) * 0.4) - extra)
     viewerHeight = Math.max(4, rows - fixed - editorHeight)
     editorBottom = 2 + editorHeight
