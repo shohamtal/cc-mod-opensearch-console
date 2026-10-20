@@ -481,18 +481,22 @@ async function attach($: EngineInterface, file?: string, config?: string): Promi
   return undefined
 }
 
-// Closes the prompt only if it is still the one this drawing showed: a press on a prompt that an
-// outside change already cancelled, or replaced, does nothing.
 // The system clipboard first (pbcopy, wl-copy, xclip, clip.exe): the terminal's own route (OSC 52)
 // is off by default in iTerm2 and missing in Terminal.app, where it reports success and copies nothing.
 async function copyText($: EngineInterface, text: string): Promise<boolean> {
-  for (const argv of COPY_COMMANDS) {
+  const windows = await onWindows($)
+  for (const cmd of COPY_COMMANDS) {
+    // On Windows, System32's clip.exe by full path, so a same-named .exe in the working folder never runs.
+    const argv = cmd[0] === 'clip.exe' ? (windows ? [await system32($, 'clip.exe')] : null) : windows ? null : cmd
+    if (!argv) continue
     const out = await $.process.run(argv, { stdin: text, timeoutMs: 5_000 }).catch(() => undefined)
     if (out && out.exitCode === 0) return true
   }
   return (await $.ui.copy({ text })).isCopied
 }
 
+// Closes the prompt only if it is still the one this drawing showed: a press on a prompt that an
+// outside change already cancelled, or replaced, does nothing.
 async function takePrompt($: EngineInterface, same: (c: OsConfirm | null) => boolean): Promise<boolean> {
   let ok = false
   await update($, confirm, c => {
@@ -503,7 +507,24 @@ async function takePrompt($: EngineInterface, same: (c: OsConfirm | null) => boo
   return ok
 }
 
-async function saveSession($: EngineInterface, extra: Record<string, unknown> = {}, file = sessionFile) {
+// One save at a time: two overlapping saves would each take the other's write for an outside one.
+// Never call saveSession from anything a save runs (sync, resolveServer): it would wait on itself.
+// A failed save tells the person, since nothing else would.
+let saving: Promise<void> = Promise.resolve()
+let badJson = ''
+function saveSession($: EngineInterface, extra: Record<string, unknown> = {}, file = sessionFile): Promise<void> {
+  const run = saving.then(() => saveSessionNow($, extra, file))
+  saving = run.catch(err => {
+    try {
+      $.ui.toast(`Not saved: ${file}: ${String(err).slice(0, 160)}`)
+    } catch {
+      // the chain must go on even if the toast can't show
+    }
+  })
+  return run
+}
+
+async function saveSessionNow($: EngineInterface, extra: Record<string, unknown>, file: string) {
   if (!file) return
   // Someone else (the agent, another editor) wrote the file since this pane last read or wrote it:
   // their editor fields win, only `extra` (a run's lastRun, a menu pick) is merged in, and the pane
@@ -514,7 +535,10 @@ async function saveSession($: EngineInterface, extra: Record<string, unknown> = 
   try {
     old = raw === undefined ? {} : (JSON.parse(raw) ?? {})
   } catch {
-    old = {}
+    // A hand edit with a JSON typo is never replaced by the pane's state; said once per broken version.
+    if (badJson !== raw) $.ui.toast(`Not saved: ${file} is not valid JSON. Fix it, or delete it to start over.`)
+    badJson = raw ?? ''
+    return
   }
   const external =
     file !== sessionFile ||
@@ -657,7 +681,8 @@ async function send($: EngineInterface, pending: OsPending) {
   }
   // lastRun first: a pane that sees the new response then reads the matching status line.
   const { text: _t, id: _i, ...meta } = next
-  await saveSession($, { lastRun: meta }, file)
+  // A failed lastRun save (it toasts) must not lose the response itself.
+  await saveSession($, { lastRun: meta }, file).catch(() => undefined)
   await write($, responsePath, next.text)
   if (next.error) $.ui.toast(`OpenSearch: ${next.error.slice(0, 200)}`)
 }
