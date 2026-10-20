@@ -300,7 +300,7 @@ async function saveSession($: EngineInterface, extra: Record<string, unknown> = 
 
 function scheduleSave($: EngineInterface) {
   saveTimer?.cancel()
-  saveTimer = $.clock.after(250, () => void saveSession($))
+  saveTimer = $.clock.after(250, () => void saveSession($).catch(() => undefined))
 }
 
 
@@ -500,12 +500,13 @@ export const register: Register = on => {
     })
     const kept = await read($, paths)
     await attach($, kept?.file, kept?.config)
-    $.clock.every(600, () => void sync($))
+    $.clock.every(600, () => void sync($).catch(() => undefined))
     return next(e)
   })
 
   on('tool.call', { tool: 'mcp__opensearch-console__console' }, async ($, e) => {
-    const input = (e.input ?? {}) as { action?: string; filepath?: string; configfilepath?: string }
+    // A plugin tool's arguments arrive on the event itself, beside `tool` and `tool_use_id`.
+    const input = e as unknown as { action?: string; filepath?: string; configfilepath?: string }
     const action = input.action ?? 'open'
     if (action === 'close') {
       if ((await $.ui.panes()).some(pane => pane.id === PANE)) await $.ui.close({ id: PANE })
@@ -517,7 +518,7 @@ export const register: Register = on => {
     if (action === 'open') {
       const opened = await $.ui.open({ id: PANE, title: `OpenSearch · ${sessionFile.split('/').pop()}` })
       placed = opened.isPlaced ? 'Pane is open. ' : `Pane not shown yet (${(opened as any).reason ?? 'terminal too narrow'}); the user can type /opensearch. `
-      void ensureIndices($)
+      void ensureIndices($).catch(() => undefined)
     }
     return { result: `${placed}Session file: ${sessionFile}\nResponse file: ${responseFile()}\nConfig file: ${configFile}` }
   })
@@ -532,7 +533,7 @@ export const register: Register = on => {
     const refused = await attach($, args.file, args.config)
     if (refused) return { text: refused }
     await $.ui.open({ id: PANE, title: `OpenSearch · ${sessionFile.split('/').pop()}`, focus: true, columns: 110 })
-    void ensureIndices($)
+    void ensureIndices($).catch(() => undefined)
     return {
       text: `OpenSearch console opened: ${sessionFile}`,
       context: [`${GUIDE}\n\nThis session's console: session file ${sessionFile}, response file ${responseFile()}, config file ${configFile}.`],
@@ -668,7 +669,7 @@ export const register: Register = on => {
                 void (async () => {
                   await update($, server, () => sv.name)
                   await saveSession($)
-                  void ensureIndices($)
+                  void ensureIndices($).catch(() => undefined)
                 })()
               }
             />
