@@ -526,31 +526,46 @@ function saveSession($: EngineInterface, extra: Record<string, unknown> = {}, fi
 
 async function saveSessionNow($: EngineInterface, extra: Record<string, unknown>, file: string) {
   if (!file) return
-  // Someone else (the agent, another editor) wrote the file since this pane last read or wrote it:
-  // their editor fields win, only `extra` (a run's lastRun, a menu pick) is merged in, and the pane
-  // reloads them. The mtime is read before the text, so a write in between counts as theirs.
-  const mtime = await $.fs.stat(file).then(st => st.mtimeMs, () => undefined)
-  const raw = await $.fs.read(file).catch(() => undefined)
-  let old: Record<string, unknown> = {}
-  try {
-    old = raw === undefined ? {} : (JSON.parse(raw) ?? {})
-  } catch {
-    // A hand edit with a JSON typo is never replaced by the pane's state; said once per broken version.
-    if (badJson !== raw) $.ui.toast(`Not saved: ${file} is not valid JSON. Fix it, or delete it to start over.`)
-    badJson = raw ?? ''
-    return
-  }
-  const external =
-    file !== sessionFile ||
-    (mtime !== undefined && seen[file] !== undefined && mtime !== seen[file]) ||
-    (raw !== undefined && seenText[file] !== undefined && raw !== seenText[file])
   // A server the config lacks is saved as asked for, never as the entry shown in its place.
-  const mine = external ? {} : { server: wantedServer || (await read($, server)), cursorRow: await read($, cursorRow), query: await read($, query) }
-  await write($, file, JSON.stringify({ ...old, ...mine, ...extra }, null, 2) + '\n')
-  if (external && file === sessionFile) {
-    delete seen[file]
-    delete seenText[file]
-    await sync($)
+  const mine = { server: wantedServer || (await read($, server)), cursorRow: await read($, cursorRow), query: await read($, query) }
+  // The engine has no atomic write, so the file is read again just before the write: when someone
+  // else saved in between, the merge starts over on top of their save, and after three tries the pane
+  // gives up rather than overwrite them.
+  for (let tries = 0; ; tries++) {
+    // Someone else (the agent, another editor) wrote the file since this pane last read or wrote it:
+    // their editor fields win, only `extra` (a run's lastRun, a menu pick) is merged in, and the pane
+    // reloads them. The mtime is read before the text, so a write in between counts as theirs.
+    const mtime = await $.fs.stat(file).then(st => st.mtimeMs, () => undefined)
+    const raw = await $.fs.read(file).catch(() => undefined)
+    let old: Record<string, unknown> = {}
+    try {
+      old = raw === undefined ? {} : (JSON.parse(raw) ?? {})
+    } catch {
+      // A hand edit with a JSON typo is never replaced by the pane's state; said once per broken version.
+      if (badJson !== raw) $.ui.toast(`Not saved: ${file} is not valid JSON. Fix it, or delete it to start over.`)
+      badJson = raw ?? ''
+      return
+    }
+    const external =
+      file !== sessionFile ||
+      (mtime !== undefined && seen[file] !== undefined && mtime !== seen[file]) ||
+      (raw !== undefined && seenText[file] !== undefined && raw !== seenText[file])
+    // Nothing of the pane's to add to their save: it is left as they wrote it.
+    if (!external || Object.keys(extra).length) {
+      const text = JSON.stringify({ ...old, ...(external ? {} : mine), ...extra }, null, 2) + '\n'
+      if ((await $.fs.read(file).catch(() => undefined)) !== raw) {
+        if (tries < 2) continue
+        $.ui.toast(`Not saved: ${file} keeps changing. Your edits are still in the pane.`)
+        return
+      }
+      await write($, file, text)
+    }
+    if (external && file === sessionFile) {
+      delete seen[file]
+      delete seenText[file]
+      await sync($)
+    }
+    return
   }
 }
 
