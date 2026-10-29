@@ -90,18 +90,18 @@ const HELP = `**Top bar**
 
 **Writes are locked** — only GET/HEAD and POST to search-type endpoints (_search, _count, _msearch, _mget, _explain, _validate, scroll, PIT…) are sent. A write opens a prompt that shows the exact request: **Run this request once**, **Unlock for this session** (not on production servers) or **Cancel**. Unlocks live in memory only; 🔓 locks again. A server that sends credentials asks once before its first request (and again if its host or credential source changes).
 
-**Files** — one JSON session file per console (default \`~/.claude/mods/opensearch/sessions/default.json\`: server, cursorRow, query, lastRun) + \`<name>.response.json\`; servers in \`servers.json\`. Edits show here live.
+**Files** — one JSON session file per console (default \`~/.claude/mods/opensearch/sessions/default.json\`: server, cursorRow, query) + \`<name>.response.json\` (the last response) + \`<name>.run.json\` (its status line); servers in \`servers.json\`. Edits show here live.
 
 **Own console per session/agent** — \`/opensearch --filepath <name>.json [--configfilepath <servers>.json]\` (relative names live under \`~/.claude/mods/opensearch/sessions/\`).
 
 Esc returns the keyboard to the prompt · \`/opensearch\` toggles this pane.`
 
-const GUIDE = `OpenSearch / Elasticsearch console (a Kibana Dev Tools-style pane the user sees; works with both). Each console is one JSON session file, so sessions and agents never overwrite each other: open your own with this tool (filepath) or the user types /opensearch --filepath <name>.json [--configfilepath <servers>.json]. The current session's files are kept across reloads.
+const GUIDE = `OpenSearch / Elasticsearch console (a Kibana Dev Tools-style pane the user sees; works with both). Each console is one JSON session file, so sessions and agents never overwrite each other: open your own with this tool (filepath, inside sessions/) or the user types /opensearch --filepath <name>.json [--configfilepath <servers>.json]. The current session's files are kept across reloads.
 
-Session file (default ~/.claude/mods/opensearch/sessions/default.json): {"server": "<name from config>", "cursorRow": <0-based line of the request the user's Run sends>, "query": "<editor text>", "lastRun": {server, method, path, status, ms, at, error?}}.
+Session file (default ~/.claude/mods/opensearch/sessions/default.json): {"server": "<name from config>", "cursorRow": <0-based line of the request the user's Run sends>, "query": "<editor text>"}.
 - query uses Dev Tools syntax: a "METHOD path" line (GET _cat/indices?v, POST my-index/_search), then an optional JSON body; several requests separated by blank lines.
 - To inject a query, write the session file (keep the other keys); the pane updates within a second. Set cursorRow to the request's METHOD line so Run sends it. Read the file to see the user's edits.
-Response file: the session file with .response.json in place of .json, the last response body (pretty JSON). Read it after the user runs.
+Response file: the session file with .response.json in place of .json, the last response body (pretty JSON). Read it after the user runs. Its status is in .run.json: {server, method, path, status, ms, at, error?}.
 Config file (default ~/.claude/mods/opensearch/servers.json): {"servers": [{"id","name","host","port","https","insecure","username","password" | "passwordEnv" | "passwordCommand","tag","headers"?,"indices"?}]}. The session file's "server" is a server id. Never print passwords.
 Writes: only reads are sent (GET/HEAD and POST to _search/_count/_msearch/_mget/_explain/_validate/_field_caps/_analyze/_termvectors/templates/scroll/PIT). A write opens a prompt for the user (run once / unlock for this session); unlocks are never read from disk, so editing servers.json cannot unlock anything. A server with credentials asks the user once before its first request. With this tool, configfilepath must be inside ~/.claude/mods/opensearch/.
 The user runs requests (▶ in the editor gutter or ctrl+r); do not run them yourself unless asked.`
@@ -145,6 +145,8 @@ let model: Model | undefined
 let matchCache: { key: string; paths: string[] } | undefined
 
 const responseFile = () => sessionFile.replace(/(\.json)?$/, '.response.json')
+// The last request's status line: server, method, path, status, ms, at, error?.
+const runFile = () => sessionFile.replace(/(\.json)?$/, '.run.json')
 const indicesFile = () => `${base}/indices.json`
 
 async function onWindows($: EngineInterface): Promise<boolean> {
@@ -422,7 +424,8 @@ async function sync($: EngineInterface) {
   if (await changed($, responseFile())) {
     const text = await $.fs.read(responseFile()).catch(() => undefined)
     const cur = await read($, result)
-    const meta = (await readJson($, sessionFile))?.lastRun ?? {}
+    // Consoles from before 0.3.0 kept the status line in the session file's lastRun.
+    const meta = (await readJson($, runFile())) ?? (await readJson($, sessionFile))?.lastRun ?? {}
     // Another run with the same body still brings its own status line.
     if (text !== undefined && (text !== cur?.text || String(meta.at ?? '') !== cur?.at)) {
       const next: OsResult = {
@@ -454,6 +457,8 @@ async function attach($: EngineInterface, file?: string, config?: string): Promi
   const nextConfig = config ? await resolvePath($, config, base) : kept?.config ?? `${base}/servers.json`
   const nextFile = file ? await resolvePath($, file.endsWith('.json') ? file : `${file}.json`, `${base}/sessions`) : kept?.file ?? `${base}/sessions/default.json`
   if (!(await $.fs.exists(nextConfig))) return `Config file not found: ${nextConfig}`
+  // Another console's response and run files: a console there would be overwritten by that console's runs.
+  if (/\.(response|run)\.json$/i.test(nextFile)) return `A session file name can't end in .response.json or .run.json: ${nextFile}`
   if (!(await $.fs.exists(nextFile))) {
     // A new console starts from the old single-file console when there is one.
     const legacy = nextFile === `${base}/sessions/default.json` ? await $.fs.read(`${base}/console.http`).catch(() => undefined) : undefined
@@ -534,7 +539,7 @@ async function saveSessionNow($: EngineInterface, extra: Record<string, unknown>
   // gives up rather than overwrite them.
   for (let tries = 0; ; tries++) {
     // Someone else (the agent, another editor) wrote the file since this pane last read or wrote it:
-    // their editor fields win, only `extra` (a run's lastRun, a menu pick) is merged in, and the pane
+    // their editor fields win, only `extra` (a menu pick) is merged in, and the pane
     // reloads them. The mtime is read before the text, so a write in between counts as theirs.
     const mtime = await $.fs.stat(file).then(st => st.mtimeMs, () => undefined)
     const raw = await $.fs.read(file).catch(() => undefined)
@@ -559,7 +564,7 @@ async function saveSessionNow($: EngineInterface, extra: Record<string, unknown>
       const text = JSON.stringify({ ...old, ...mine, ...extra }, null, 2) + '\n'
       if ((await $.fs.read(file).catch(() => undefined)) !== raw) {
         if (tries < 2) continue
-        tell($, `Not saved: ${file} kept changing while the pane saved, so the request's result or menu pick was not recorded.`)
+        tell($, `Not saved: ${file} kept changing while the pane saved, so the menu pick was not saved.`)
         return
       }
       await write($, file, text)
@@ -672,6 +677,7 @@ async function send($: EngineInterface, pending: OsPending) {
   // The console this request belongs to: a switch to another session file meanwhile doesn't move it.
   const file = sessionFile
   const responsePath = responseFile()
+  const runPath = runFile()
   await update($, running, () => true)
   const started = Date.now()
   let next: OsResult
@@ -698,11 +704,15 @@ async function send($: EngineInterface, pending: OsPending) {
     await update($, result, () => next)
     await update($, view, v => ({ ...EMPTY_VIEW, search: v?.search ?? '' }))
   }
-  // lastRun first: a pane that sees the new response then reads the matching status line.
+  // Only the run and response files: a request never writes the session file, which the agent and
+  // other editors share with the pane and no write of the pane's could make safe against them.
+  // The status line first: a pane that sees the new response then reads the matching one.
   const { text: _t, id: _i, ...meta } = next
-  // A failed lastRun save (it toasts) must not lose the response itself.
-  await saveSession($, { lastRun: meta }, file).catch(() => undefined)
+  // A status line that can't be saved must not lose the response itself.
+  await write($, runPath, JSON.stringify(meta, null, 2) + '\n').catch(() => undefined)
   await write($, responsePath, next.text)
+  // An outside save made while it ran shows now, not on the next poll.
+  if (file === sessionFile) await sync($)
   if (next.error) $.ui.toast(`OpenSearch: ${next.error.slice(0, 200)}`)
 }
 
@@ -815,16 +825,24 @@ export const register: Register = on => {
       if ((await $.ui.panes()).some(pane => pane.id === PANE)) await $.ui.close({ id: PANE })
       return { result: 'OpenSearch console closed.' }
     }
-    // An agent may open its own console, but only with a config inside the mod's folder:
-    // pointing the pane at another config is the person's call (/opensearch --configfilepath).
-    if (input.configfilepath) {
+    // An agent's console files stay inside the mod's folder: a session file under sessions/, a config
+    // elsewhere in it. Other paths are the person's call (/opensearch --filepath … --configfilepath …).
+    if (input.filepath || input.configfilepath) {
       if (!base) await ensureBase($)
-      const want = await resolvePath($, input.configfilepath, base)
       // Backslashes are separators only on Windows; elsewhere `opensearch\\x` is a sibling folder.
       const slash = (await onWindows($)) ? toSlash : (p: string) => p
-      const real = slash((await $.fs.stat(want, { resolve: true }).catch(() => undefined))?.realPath ?? want)
-      const root = slash((await $.fs.stat(base, { resolve: true }).catch(() => undefined))?.realPath ?? base)
-      if (!real.startsWith(root + '/') || real.toLowerCase().startsWith((root + '/sessions/').toLowerCase())) return { result: `configfilepath must be inside ${base}/ (not sessions/). Ask the user to open other configs with /opensearch --configfilepath.`, isError: true }
+      const realOf = async (p: string) => slash((await $.fs.stat(p, { resolve: true }).catch(() => undefined))?.realPath ?? p)
+      const root = await realOf(base)
+      const sessions = (root + '/sessions/').toLowerCase()
+      if (input.filepath) {
+        const want = await resolvePath($, input.filepath.endsWith('.json') ? input.filepath : `${input.filepath}.json`, `${base}/sessions`)
+        const real = await realOf(want)
+        if (/(^|[\\/])\.\.([\\/]|$)/.test(want) || !real.toLowerCase().startsWith(sessions)) return { result: `filepath must be inside ${base}/sessions/. Ask the user to open other files with /opensearch --filepath.`, isError: true }
+      }
+      if (input.configfilepath) {
+        const real = await realOf(await resolvePath($, input.configfilepath, base))
+        if (!real.startsWith(root + '/') || real.toLowerCase().startsWith(sessions)) return { result: `configfilepath must be inside ${base}/ (not sessions/). Ask the user to open other configs with /opensearch --configfilepath.`, isError: true }
+      }
     }
     const refused = await attach($, input.filepath, input.configfilepath)
     if (refused) return { result: refused, isError: true }
@@ -833,7 +851,7 @@ export const register: Register = on => {
       const opened = await $.ui.open({ id: PANE, title: `OpenSearch · ${sessionFile.split('/').pop()}` })
       placed = opened.isPlaced ? 'Pane is open. ' : `Pane not shown yet (${(opened as any).reason ?? 'terminal too narrow'}); the user can type /opensearch. `
     }
-    return { result: `${placed}Session file: ${sessionFile}\nResponse file: ${responseFile()}\nConfig file: ${configFile}` }
+    return { result: `${placed}Session file: ${sessionFile}\nResponse file: ${responseFile()}\nRun file: ${runFile()}\nConfig file: ${configFile}` }
   })
 
   on('command.run', { command: 'opensearch' }, async ($, e) => {
@@ -849,7 +867,7 @@ export const register: Register = on => {
     void ensureIndices($).catch(() => undefined)
     return {
       text: `OpenSearch console opened: ${sessionFile}`,
-      context: [`${GUIDE}\n\nThis session's console: session file ${sessionFile}, response file ${responseFile()}, config file ${configFile}.`],
+      context: [`${GUIDE}\n\nThis session's console: session file ${sessionFile}, response file ${responseFile()}, run file ${runFile()}, config file ${configFile}.`],
     }
   })
 

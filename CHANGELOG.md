@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.3.0
+
+- **Sending a request never writes the session file.** The status line (`server, method, path, status, ms, at, error?`) moved from the session file's `lastRun` to a new `<name>.run.json`, next to `<name>.response.json`. The session file is shared with the agent and other editors, and no write of the pane's could be made safe against a save landing after its last read, so a request no longer writes it at all. The session file is now written only for your own edits and menu picks. Reported in the catalogue review.
+- **The agent tool keeps a console inside `sessions/`**, as the MySQL client does: a `filepath` elsewhere is refused (the person can still open any file with `/opensearch --filepath`). A console can't be named after another console's response or run file (`*.response.json`, `*.run.json`).
+- A run file that can't be written no longer loses the response, and a console from an older version shows its status line from the old `lastRun` until its next run.
+
 ## 0.2.4
 
 - **A save that someone else's save lands in the middle of no longer overwrites it:** the pane reads the session file again just before writing. If it changed, the pane merges again on top of the new version, and after three tries it gives up without writing and says the result or menu pick was not recorded. A toast that fails to show no longer stops later saves. An editor save that finds an outside change no longer writes at all. Claude Code has no atomic file write, so only a save landing in the instant between that last read and the write can still be lost. Reported in the catalogue review.
