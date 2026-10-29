@@ -124,12 +124,13 @@ Everything the pane shows is backed by plain files, so the agent needs no specia
 
 | File | What it holds |
 |---|---|
-| `~/.claude/mods/opensearch/sessions/<name>.json` | `{ server, cursorRow, query, lastRun }`, which is the editor text and which request ▶ runs |
+| `~/.claude/mods/opensearch/sessions/<name>.json` | `{ server, cursorRow, query }`, which is the editor text and which request ▶ runs |
 | `~/.claude/mods/opensearch/sessions/<name>.response.json` | The last response body (pretty JSON) |
+| `~/.claude/mods/opensearch/sessions/<name>.run.json` | That response's status line: `{ server, method, path, status, ms, at, error? }` |
 | `~/.claude/mods/opensearch/servers.json` | Clusters and credentials (any path via `--configfilepath`) |
 | `~/.claude/mods/opensearch/indices.json` | Cached index and alias names for autocomplete, per server URL |
 
-Writes to these files show up in the pane within a second, and your edits are written back.
+Writes to these files show up in the pane within a second, and your edits are written back. The pane writes the session file only for your own edits and menu picks. Sending a request writes only the response and run files, so it never overwrites a query the agent just wrote.
 
 ### Separate consoles per session or agent
 

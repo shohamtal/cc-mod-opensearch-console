@@ -87,13 +87,14 @@ describe('session file races', () => {
     expect(url).toContain('10.0.0.3')
   })
 
-  test('a timed save and a finished request together keep lastRun', async ($, on) => {
+  test('a timed save and a finished request together keep the status line', async ($, on) => {
     const w = world(on, [{ id: 'local', name: 'Local', host: '127.0.0.1' }], 250)
     await $.tool.call({ tool: TOOL, action: 'status', filepath: 's1.json' } as any)
     const ui: any = await $.ui.mount(PANE)
     const p = ui.post({ type: 'run', text: 'GET x', row: 0 }, { in: 'editor' })
     await w.clock.advance(400)
     await p
-    expect(sess(w).lastRun?.path).toBe('x')
+    expect(JSON.parse(w.files.get(`${BASE}/sessions/s1.run.json`)!).path).toBe('x')
+    expect(sess(w).lastRun).toBeUndefined()
   })
 })
