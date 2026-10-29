@@ -424,7 +424,8 @@ async function sync($: EngineInterface) {
   if (await changed($, responseFile())) {
     const text = await $.fs.read(responseFile()).catch(() => undefined)
     const cur = await read($, result)
-    const meta = (await readJson($, runFile())) ?? {}
+    // Consoles from before 0.3.0 kept the status line in the session file's lastRun.
+    const meta = (await readJson($, runFile())) ?? (await readJson($, sessionFile))?.lastRun ?? {}
     // Another run with the same body still brings its own status line.
     if (text !== undefined && (text !== cur?.text || String(meta.at ?? '') !== cur?.at)) {
       const next: OsResult = {
@@ -456,6 +457,8 @@ async function attach($: EngineInterface, file?: string, config?: string): Promi
   const nextConfig = config ? await resolvePath($, config, base) : kept?.config ?? `${base}/servers.json`
   const nextFile = file ? await resolvePath($, file.endsWith('.json') ? file : `${file}.json`, `${base}/sessions`) : kept?.file ?? `${base}/sessions/default.json`
   if (!(await $.fs.exists(nextConfig))) return `Config file not found: ${nextConfig}`
+  // Another console's response and run files: a console there would be overwritten by that console's runs.
+  if (/\.(response|run)\.json$/i.test(nextFile)) return `A session file name can't end in .response.json or .run.json: ${nextFile}`
   if (!(await $.fs.exists(nextFile))) {
     // A new console starts from the old single-file console when there is one.
     const legacy = nextFile === `${base}/sessions/default.json` ? await $.fs.read(`${base}/console.http`).catch(() => undefined) : undefined
@@ -705,7 +708,8 @@ async function send($: EngineInterface, pending: OsPending) {
   // other editors share with the pane and no write of the pane's could make safe against them.
   // The status line first: a pane that sees the new response then reads the matching one.
   const { text: _t, id: _i, ...meta } = next
-  await write($, runPath, JSON.stringify(meta, null, 2) + '\n')
+  // A status line that can't be saved must not lose the response itself.
+  await write($, runPath, JSON.stringify(meta, null, 2) + '\n').catch(() => undefined)
   await write($, responsePath, next.text)
   // An outside save made while it ran shows now, not on the next poll.
   if (file === sessionFile) await sync($)
@@ -821,16 +825,24 @@ export const register: Register = on => {
       if ((await $.ui.panes()).some(pane => pane.id === PANE)) await $.ui.close({ id: PANE })
       return { result: 'OpenSearch console closed.' }
     }
-    // An agent may open its own console, but only with a config inside the mod's folder:
-    // pointing the pane at another config is the person's call (/opensearch --configfilepath).
-    if (input.configfilepath) {
+    // An agent's console files stay inside the mod's folder: a session file under sessions/, a config
+    // elsewhere in it. Other paths are the person's call (/opensearch --filepath … --configfilepath …).
+    if (input.filepath || input.configfilepath) {
       if (!base) await ensureBase($)
-      const want = await resolvePath($, input.configfilepath, base)
       // Backslashes are separators only on Windows; elsewhere `opensearch\\x` is a sibling folder.
       const slash = (await onWindows($)) ? toSlash : (p: string) => p
-      const real = slash((await $.fs.stat(want, { resolve: true }).catch(() => undefined))?.realPath ?? want)
-      const root = slash((await $.fs.stat(base, { resolve: true }).catch(() => undefined))?.realPath ?? base)
-      if (!real.startsWith(root + '/') || real.toLowerCase().startsWith((root + '/sessions/').toLowerCase())) return { result: `configfilepath must be inside ${base}/ (not sessions/). Ask the user to open other configs with /opensearch --configfilepath.`, isError: true }
+      const realOf = async (p: string) => slash((await $.fs.stat(p, { resolve: true }).catch(() => undefined))?.realPath ?? p)
+      const root = await realOf(base)
+      const sessions = (root + '/sessions/').toLowerCase()
+      if (input.filepath) {
+        const want = await resolvePath($, input.filepath.endsWith('.json') ? input.filepath : `${input.filepath}.json`, `${base}/sessions`)
+        const real = await realOf(want)
+        if (/(^|[\\/])\.\.([\\/]|$)/.test(want) || !real.toLowerCase().startsWith(sessions)) return { result: `filepath must be inside ${base}/sessions/. Ask the user to open other files with /opensearch --filepath.`, isError: true }
+      }
+      if (input.configfilepath) {
+        const real = await realOf(await resolvePath($, input.configfilepath, base))
+        if (!real.startsWith(root + '/') || real.toLowerCase().startsWith(sessions)) return { result: `configfilepath must be inside ${base}/ (not sessions/). Ask the user to open other configs with /opensearch --configfilepath.`, isError: true }
+      }
     }
     const refused = await attach($, input.filepath, input.configfilepath)
     if (refused) return { result: refused, isError: true }
