@@ -602,3 +602,15 @@ export function pageFrom(text: string, from: number, width: number, height: numb
   }
   return { rows, end: i }
 }
+
+// The console tool's description. Claude Code passes the model only its first 2048 characters, so
+// the whole text stays under that (a test checks it).
+export const GUIDE = `OpenSearch / Elasticsearch console (a Kibana Dev Tools-style pane the user sees; works with both). Each console is one JSON session file, so sessions and agents never overwrite each other: open your own with this tool (filepath, inside sessions/) or the user types /opensearch --filepath <name>.json [--configfilepath <servers>.json]. The current session's files are kept across reloads.
+
+Session file (default ~/.claude/mods/opensearch/sessions/default.json): {"server": "<name from config>", "cursorRow": <0-based line of the request the user's Run sends>, "query": "<editor text>"}.
+- query uses Dev Tools syntax: a "METHOD path" line (GET _cat/indices?v, POST my-index/_search), then an optional JSON body; several requests separated by blank lines.
+- To inject a query, write the session file (keep the other keys); the pane updates within a second. Set cursorRow to the request's METHOD line so Run sends it. Read the file to see the user's edits.
+Response file: the session file with .response.json in place of .json, the last response body (pretty JSON). Read it after the user runs. Its status is in .run.json: {server, method, path, status, ms, at, error?}.
+Config file (default ~/.claude/mods/opensearch/servers.json): {"servers": [{"id","name","host","port","https","insecure","username","password" | "passwordEnv" | "passwordCommand","tag","headers"?,"indices"?}]}. The session file's "server" is a server id. Never print passwords.
+Writes: only reads are sent (GET/HEAD and POST to _search/_count/_msearch/_mget/_explain/_validate/_field_caps/_analyze/_termvectors/templates/scroll/PIT). A write opens a prompt for the user (run once / unlock for this session); unlocks are never read from disk, so editing servers.json cannot unlock anything. A server with credentials asks the user once before its first request. With this tool, configfilepath must be inside ~/.claude/mods/opensearch/.
+The user runs requests (▶ in the editor gutter or ctrl+r); do not run them yourself unless asked.`

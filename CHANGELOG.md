@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.3.1
+
+- **The agent tool's path check ignores case only on Windows.** On a case-sensitive disk, `Sessions` is another folder; on macOS a path in another case is refused rather than let through.
+- **A new console under a symlinked folder in `sessions/` counts where the link points:** the agent tool resolves the nearest existing folder's real path, so a link can't carry a new file outside the mod's folder.
+- **A saved console that can't be opened any more** (its name is now refused, or its config is gone) gives way to the default console when Claude Code starts, and a toast says why, instead of leaving the pane empty.
+- The tool description moved to `lib.ts`, with a test that keeps it within the 2048 characters Claude Code passes the model.
+
 ## 0.3.0
 
 - **Sending a request never writes the session file.** The status line (`server, method, path, status, ms, at, error?`) moved from the session file's `lastRun` to a new `<name>.run.json`, next to `<name>.response.json`. The session file is shared with the agent and other editors, and no write of the pane's could be made safe against a save landing after its last read, so a request no longer writes it at all. The session file is now written only for your own edits and menu picks. Reported in the catalogue review.

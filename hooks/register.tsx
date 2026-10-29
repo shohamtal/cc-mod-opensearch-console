@@ -38,6 +38,7 @@ import {
   homeOf,
   fromCmdSet,
   ENV_NAME,
+  GUIDE,
   type Server,
 } from './lib'
 
@@ -96,15 +97,6 @@ const HELP = `**Top bar**
 
 Esc returns the keyboard to the prompt · \`/opensearch\` toggles this pane.`
 
-const GUIDE = `OpenSearch / Elasticsearch console (a Kibana Dev Tools-style pane the user sees; works with both). Each console is one JSON session file, so sessions and agents never overwrite each other: open your own with this tool (filepath, inside sessions/) or the user types /opensearch --filepath <name>.json [--configfilepath <servers>.json]. The current session's files are kept across reloads.
-
-Session file (default ~/.claude/mods/opensearch/sessions/default.json): {"server": "<name from config>", "cursorRow": <0-based line of the request the user's Run sends>, "query": "<editor text>"}.
-- query uses Dev Tools syntax: a "METHOD path" line (GET _cat/indices?v, POST my-index/_search), then an optional JSON body; several requests separated by blank lines.
-- To inject a query, write the session file (keep the other keys); the pane updates within a second. Set cursorRow to the request's METHOD line so Run sends it. Read the file to see the user's edits.
-Response file: the session file with .response.json in place of .json, the last response body (pretty JSON). Read it after the user runs. Its status is in .run.json: {server, method, path, status, ms, at, error?}.
-Config file (default ~/.claude/mods/opensearch/servers.json): {"servers": [{"id","name","host","port","https","insecure","username","password" | "passwordEnv" | "passwordCommand","tag","headers"?,"indices"?}]}. The session file's "server" is a server id. Never print passwords.
-Writes: only reads are sent (GET/HEAD and POST to _search/_count/_msearch/_mget/_explain/_validate/_field_caps/_analyze/_termvectors/templates/scroll/PIT). A write opens a prompt for the user (run once / unlock for this session); unlocks are never read from disk, so editing servers.json cannot unlock anything. A server with credentials asks the user once before its first request. With this tool, configfilepath must be inside ~/.claude/mods/opensearch/.
-The user runs requests (▶ in the editor gutter or ctrl+r); do not run them yourself unless asked.`
 
 const DEFAULT_SERVERS = {
   _help:
@@ -167,6 +159,16 @@ async function curlBin($: EngineInterface): Promise<string> {
   if (!(await onWindows($))) return 'curl'
   const own = await system32($, 'curl.exe')
   return (await $.fs.exists(own).catch(() => false)) ? own : 'curl'
+}
+
+// Where a path really lands: the nearest existing folder's real path plus the rest, so a new file
+// under a symlinked folder counts where the link points.
+async function realPathOf($: EngineInterface, p: string, windows: boolean): Promise<string> {
+  const st = await $.fs.stat(p, { resolve: true }).catch(() => undefined)
+  if (st) return st.realPath ?? p
+  const cut = windows ? Math.max(p.lastIndexOf('/'), p.lastIndexOf('\\')) : p.lastIndexOf('/')
+  if (cut <= 0) return p
+  return `${await realPathOf($, p.slice(0, cut), windows)}/${p.slice(cut + 1)}`
 }
 
 async function resolvePath($: EngineInterface, p: string, under: string): Promise<string> {
@@ -451,6 +453,15 @@ async function ensureBase($: EngineInterface) {
 
 // Points this session's console at a session file and a config file, creating the session file.
 // Answers why it could not, or undefined.
+// The console this session had before a restart. One that can't be opened any more (its name is
+// now refused, or its files are gone) gives way to the default console, and the person is told why.
+async function reattach($: EngineInterface, file?: string, config?: string) {
+  const refused = await attach($, file, config).catch(err => String(err))
+  if (!refused) return
+  const fallback = (await attach($, 'default.json', config).catch(err => String(err))) && (await attach($, 'default.json', 'servers.json').catch(err => String(err)))
+  tell($, fallback ? `OpenSearch console: ${refused}` : `OpenSearch console: ${refused}. Opened the default console instead.`)
+}
+
 async function attach($: EngineInterface, file?: string, config?: string): Promise<string | undefined> {
   await ensureBase($)
   const kept = await read($, paths)
@@ -812,7 +823,7 @@ export const register: Register = on => {
       },
     })
     const kept = await read($, paths)
-    await attach($, kept?.file, kept?.config)
+    await reattach($, kept?.file, kept?.config)
     $.clock.every(600, () => void sync($).catch(() => undefined))
     return next(e)
   })
@@ -829,19 +840,23 @@ export const register: Register = on => {
     // elsewhere in it. Other paths are the person's call (/opensearch --filepath … --configfilepath …).
     if (input.filepath || input.configfilepath) {
       if (!base) await ensureBase($)
-      // Backslashes are separators only on Windows; elsewhere `opensearch\\x` is a sibling folder.
-      const slash = (await onWindows($)) ? toSlash : (p: string) => p
-      const realOf = async (p: string) => slash((await $.fs.stat(p, { resolve: true }).catch(() => undefined))?.realPath ?? p)
+      // Backslashes are separators only on Windows; elsewhere `opensearch\\x` is a sibling folder. Case
+      // is ignored only on Windows too: on a case-sensitive disk `Sessions` is another folder, and on
+      // macOS a path in another case is refused, never let through.
+      const windows = await onWindows($)
+      const slash = windows ? toSlash : (p: string) => p
+      const fold = windows ? (p: string) => p.toLowerCase() : (p: string) => p
+      const realOf = async (p: string) => fold(slash(await realPathOf($, p, windows)))
       const root = await realOf(base)
-      const sessions = (root + '/sessions/').toLowerCase()
+      const sessions = root + '/sessions/'
       if (input.filepath) {
         const want = await resolvePath($, input.filepath.endsWith('.json') ? input.filepath : `${input.filepath}.json`, `${base}/sessions`)
         const real = await realOf(want)
-        if (/(^|[\\/])\.\.([\\/]|$)/.test(want) || !real.toLowerCase().startsWith(sessions)) return { result: `filepath must be inside ${base}/sessions/. Ask the user to open other files with /opensearch --filepath.`, isError: true }
+        if (/(^|[\\/])\.\.([\\/]|$)/.test(want) || !real.startsWith(sessions)) return { result: `filepath must be inside ${base}/sessions/. Ask the user to open other files with /opensearch --filepath.`, isError: true }
       }
       if (input.configfilepath) {
         const real = await realOf(await resolvePath($, input.configfilepath, base))
-        if (!real.startsWith(root + '/') || real.toLowerCase().startsWith(sessions)) return { result: `configfilepath must be inside ${base}/ (not sessions/). Ask the user to open other configs with /opensearch --configfilepath.`, isError: true }
+        if (!real.startsWith(root + '/') || real.startsWith(sessions)) return { result: `configfilepath must be inside ${base}/ (not sessions/). Ask the user to open other configs with /opensearch --configfilepath.`, isError: true }
       }
     }
     const refused = await attach($, input.filepath, input.configfilepath)
