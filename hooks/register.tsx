@@ -96,7 +96,7 @@ const HELP = `**Top bar**
 
 Esc returns the keyboard to the prompt · \`/opensearch\` toggles this pane.`
 
-const GUIDE = `OpenSearch / Elasticsearch console (a Kibana Dev Tools-style pane the user sees; works with both). Each console is one JSON session file, so sessions and agents never overwrite each other: open your own with this tool (filepath) or the user types /opensearch --filepath <name>.json [--configfilepath <servers>.json]. The current session's files are kept across reloads.
+const GUIDE = `OpenSearch / Elasticsearch console (a Kibana Dev Tools-style pane the user sees; works with both). Each console is one JSON session file, so sessions and agents never overwrite each other: open your own with this tool (filepath, inside sessions/) or the user types /opensearch --filepath <name>.json [--configfilepath <servers>.json]. The current session's files are kept across reloads.
 
 Session file (default ~/.claude/mods/opensearch/sessions/default.json): {"server": "<name from config>", "cursorRow": <0-based line of the request the user's Run sends>, "query": "<editor text>"}.
 - query uses Dev Tools syntax: a "METHOD path" line (GET _cat/indices?v, POST my-index/_search), then an optional JSON body; several requests separated by blank lines.
