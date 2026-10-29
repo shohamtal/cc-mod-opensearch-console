@@ -1,6 +1,7 @@
 import { describe, expect, test } from 'claude-code/testing'
 
 import {
+  GUIDE,
   ancestorsOpen, buildLines, curlConfig, findMatches, foldablePaths, formatAt, highlight,
   lineText, parseCurlOutput, parseRequests, requestAt, requestBody, writeGuard, parseArgs, normalizeServer, baseUrl, duplicateKey, sentBody, asciiView, pageFrom,
   toSlash, isAbsolutePath, homeOf, fromCmdSet, ENV_NAME,
@@ -212,4 +213,9 @@ describe('Windows', () => {
     for (const n of ['A&B', 'A B', '%X%', 'A|calc', '']) expect(ENV_NAME.test(n)).toBe(false)
     expect(ENV_NAME.test('OS_PASS_1')).toBe(true)
   })
+})
+
+test('the tool description fits the 2048 characters Claude Code passes the model', () => {
+  expect(GUIDE.length).toBeLessThanOrEqual(2048)
+  expect(GUIDE).toContain('inside sessions/')
 })
