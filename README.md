@@ -1,5 +1,8 @@
 # OpenSearch & Elasticsearch Console: a Claude Code mod
 
+[![reach](https://raw.githubusercontent.com/karanb192/awesome-claude-code-mods/main/badges/shohamtal--cc-mod-opensearch-console--opensearch-console-reach.svg)](https://mods.aidojo.si/mods/shohamtal--cc-mod-opensearch-console--opensearch-console/)
+[![validates](https://raw.githubusercontent.com/karanb192/awesome-claude-code-mods/main/badges/shohamtal--cc-mod-opensearch-console--opensearch-console-validates.svg)](https://mods.aidojo.si/mods/shohamtal--cc-mod-opensearch-console--opensearch-console/)
+
 A Kibana / OpenSearch Dashboards **Dev Tools-style console** for **OpenSearch and Elasticsearch** that lives in a Claude Code side pane.
 Claude writes queries into it, you read, edit and run them, and Claude reads the response back.
 Works with OpenSearch and Elasticsearch through the REST API they share, and **every write asks you first**.
